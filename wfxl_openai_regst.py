@@ -38,13 +38,13 @@ EMAIL_API_MODE = "cloudflare_temp_email"
 
 # [公共配置: cloudflare_temp_email / imap 共享]
 MAIL_DOMAINS = "domain1.com,domain2.xyz,domain3.net" # 你的域名 (支持逗号分隔多域名随机轮换) 如果只有一个域名就只填一个域名
-GPTMAIL_BASE = "https://your-domain.com"     # 你的临时邮箱 后端API 基础地址 结尾不要/
+GPTMAIL_BASE = "https://your-domain.com"     # 你的临时邮箱 后端API 基础地址 结尾不要/，注意：用浏览器打开后端api验证是否可访问
 
 # [模式 "imap" 专属配置] (CF Catch-all 转发接收端)
-IMAP_SERVER = "imap.qq.com"           # IMAP 服务器地址
+IMAP_SERVER = "imap.qq.com"           # 默认为QQ IMAP 服务器地址,谷歌为imap.gmail.com
 IMAP_PORT = 993                          # IMAP 端口
-IMAP_USER = "QQ邮箱" # 接收转发的真实邮箱账号
-IMAP_PASS = "专用密码"          # 16位应用专用密码
+IMAP_USER = "邮箱" # 接收转发的真实邮箱账号
+IMAP_PASS = "专用密码"          # 16位应用专用密码，谷歌邮箱要去https://myaccount.google.com/apppasswords这里创建专属应用密码
 
 # [模式 "freemail" 专属]
 FREEMAIL_API_URL = "https://your-domain.com"
@@ -53,7 +53,9 @@ FREEMAIL_API_TOKEN = ""
 # [模式 "cloudflare_temp_email" 专属配置]
 ADMIN_AUTH = "" # 你的临时邮箱管理员密码
 
-DEFAULT_PROXY = "" #代理地址，例子：http://127.0.0.1:7897
+DEFAULT_PROXY = "" #openai注册时代理地址，例子：http://127.0.0.1:7897
+# [邮箱代理专项配置]
+USE_PROXY_FOR_EMAIL = False  # 【开关】True 表示获取邮箱也用代理，False 表示直连（推荐先试 False）
 TOKEN_OUTPUT_DIR = os.getenv("TOKEN_OUTPUT_DIR", "").strip() #目录 默认存放跟脚本一个目录
 # ================= 这里不要动 =================
 AUTH_URL = "https://auth.openai.com/oauth/authorize"
@@ -119,6 +121,7 @@ def _skip_net_check() -> bool:
 
 def get_email_and_token(proxies: Any = None) -> tuple:
     """兼容三模式的邮箱获取逻辑 (支持多域名随机轮换)"""
+    mail_proxies = proxies if USE_PROXY_FOR_EMAIL else None
     letters = ''.join(random.choices(string.ascii_lowercase, k=5))
     digits = ''.join(random.choices(string.digits, k=random.randint(1, 3)))
     suffix = ''.join(random.choices(string.ascii_lowercase, k=random.randint(1, 3)))
@@ -130,7 +133,7 @@ def get_email_and_token(proxies: Any = None) -> tuple:
             try:
                 res = requests.get(
                     f"{FREEMAIL_API_URL.rstrip('/')}/api/generate",
-                    headers=headers, proxies=proxies, verify=_ssl_verify(), timeout=15
+                    headers=headers, proxies=mail_proxies, verify=_ssl_verify(), timeout=15
                 )
                 res.raise_for_status()
                 data = res.json()
@@ -165,7 +168,7 @@ def get_email_and_token(proxies: Any = None) -> tuple:
         try:
             res = requests.post(
                 f"{GPTMAIL_BASE}/admin/new_address", headers=headers, json=body,
-                proxies=proxies, verify=_ssl_verify(), timeout=15
+                proxies=mail_proxies, verify=_ssl_verify(), timeout=15
             )
             res.raise_for_status()
             data = res.json()
@@ -254,39 +257,49 @@ def _extract_otp_code(content: str) -> str:
 
 def get_oai_code(email: str, jwt: str = "", proxies: Any = None, processed_mail_ids: set = None, pattern: str = OTP_CODE_PATTERN) -> str:
     """基于 Mail ID 过滤的验证码提取 (支持 JWT 或 Admin 双重鉴权)"""
+    mail_proxies = proxies if USE_PROXY_FOR_EMAIL else None
     base_url = GPTMAIL_BASE.rstrip('/')
     print(f"[{ts()}] [INFO] 等待接收验证码 ({email}) ", end="", flush=True)
 
     if processed_mail_ids is None:
         processed_mail_ids = set()
+        
+    mail_conn = None
+    if EMAIL_API_MODE == "imap":
+        try:
+            mail_conn = imaplib.IMAP4_SSL(IMAP_SERVER, IMAP_PORT, timeout=15)
+            clean_pass = IMAP_PASS.replace(" ", "")
+            mail_conn.login(IMAP_USER, clean_pass)
+        except Exception as e:
+            print(f"\n[{ts()}] [ERROR] IMAP 初始登录失败: {e}")
+            mail_conn = None
 
     for attempt in range(40):
         try:
             if EMAIL_API_MODE == "imap":
-                try:
-                    mail = imaplib.IMAP4_SSL(IMAP_SERVER, IMAP_PORT, timeout=15)
-                    clean_pass = IMAP_PASS.replace(" ", "")
-                    mail.login(IMAP_USER, clean_pass)
-                except Exception as e:
-                    print(f"\n[{ts()}] [ERROR] IMAP 登录失败: {e}")
-                    time.sleep(5)
-                    continue
+                if not mail_conn:
+                    try:
+                        mail_conn = imaplib.IMAP4_SSL(IMAP_SERVER, IMAP_PORT, timeout=15)
+                        mail_conn.login(IMAP_USER, IMAP_PASS.replace(" ", ""))
+                    except Exception as e:
+                        time.sleep(5)
+                        continue
 
                 folders_to_check = ['INBOX', '"[Gmail]/Spam"']
                 found_in_loop = False
                 
                 for folder in folders_to_check:
                     try:
-                        status, _ = mail.select(folder, readonly=True)
+                        status, _ = mail_conn.select(folder, readonly=True)
                         if status != 'OK': continue
                         
-                        status, messages = mail.search(None, '(FROM "openai.com")')
+                        status, messages = mail_conn.search(None, '(FROM "openai.com")')
                         if status == 'OK' and messages[0]:
                             mail_ids = messages[0].split()
                             latest_id = mail_ids[-1]
                             
                             if latest_id not in processed_mail_ids:
-                                res, data = mail.fetch(latest_id, '(RFC822)')
+                                res, data = mail_conn.fetch(latest_id, '(RFC822)')
                                 for response_part in data:
                                     if isinstance(response_part, tuple):
                                         msg = email_lib.message_from_bytes(response_part[1])
@@ -310,19 +323,24 @@ def get_oai_code(email: str, jwt: str = "", proxies: Any = None, processed_mail_
                                         if code:
                                             processed_mail_ids.add(latest_id)
                                             print(f"\n[{ts()}] [SUCCESS] 验证码: {code}")
-                                            mail.logout()
+                                            try:
+                                                mail_conn.logout()
+                                            except Exception:
+                                                pass
                                             return code
                                         else:
                                             processed_mail_ids.add(latest_id)
-                                
-                                found_in_loop = True
-                                break
+                            
+                            found_in_loop = True
+                            break
+                    except imaplib.IMAP4.abort as e:
+                        print(f"\n[{ts()}] [WARNING] IMAP 连接断开，将在下次循环重连...")
+                        mail_conn = None
+                        break
                     except Exception as e:
-
                         if "Spam" in folder:
-                            print(f"\n[{ts()}] [DEBUG] 访问垃圾箱失败(可能路径不对): {e}")
+                            print(f"\n[{ts()}] [DEBUG] 访问垃圾箱失败: {e}")
                 
-                mail.logout()
                 if not found_in_loop:
                     print(".", end="", flush=True)
             elif EMAIL_API_MODE == "freemail":
@@ -331,7 +349,7 @@ def get_oai_code(email: str, jwt: str = "", proxies: Any = None, processed_mail_
                     f"{FREEMAIL_API_URL.rstrip('/')}/api/emails",
                     params={"mailbox": email, "limit": 20},
                     headers=headers,
-                    proxies=proxies, verify=_ssl_verify(), timeout=15,
+                    proxies=mail_proxies, verify=_ssl_verify(), timeout=15,
                 )
 
                 if res.status_code == 200:
@@ -342,16 +360,14 @@ def get_oai_code(email: str, jwt: str = "", proxies: Any = None, processed_mail_
                             if not mail_id or mail_id in processed_mail_ids:
                                 continue
                             
-                            # 🚀 Freemail 强力特性：列表里通常直接携带了 verification_code
                             code = str(mail.get("verification_code") or "")
                             
-                            # 兜底策略：如果自带的 verification_code 是空的，我们再拉取详情用正则抠
                             if not code:
                                 content = str(mail.get("subject") or "")
                                 detail_res = requests.get(
                                     f"{FREEMAIL_API_URL.rstrip('/')}/api/email/{mail_id}",
                                     headers=headers,
-                                    proxies=proxies, verify=_ssl_verify(), timeout=15,
+                                    proxies=mail_proxies, verify=_ssl_verify(), timeout=15,
                                 )
                                 if detail_res.status_code == 200:
                                     detail = detail_res.json()
@@ -372,14 +388,14 @@ def get_oai_code(email: str, jwt: str = "", proxies: Any = None, processed_mail_
                         f"{base_url}/api/mails",
                         params={"limit": 20, "offset": 0},
                         headers={"Authorization": "Bearer " + jwt, "Content-Type": "application/json", "Accept": "application/json"},
-                        proxies=proxies, verify=_ssl_verify(), timeout=15,
+                        proxies=mail_proxies, verify=_ssl_verify(), timeout=15,
                     )
                 else:
                     res = requests.get(
                         f"{base_url}/admin/mails",
                         params={"limit": 20, "offset": 0, "address": email},
                         headers={"x-admin-auth": ADMIN_AUTH},
-                        proxies=proxies, verify=_ssl_verify(), timeout=15,
+                        proxies=mail_proxies, verify=_ssl_verify(), timeout=15,
                     )
                 
                 if res.status_code != 200:
