@@ -617,7 +617,6 @@ def get_oai_code(
 
                         subject = str(msg.get("subject", ""))
                         code = ""
-                        import re
                         m = re.search(r"(?<!\d)(\d{6})(?!\d)", subject)
                         if m:
                             code = m.group(1)

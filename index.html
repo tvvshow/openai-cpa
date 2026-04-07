@@ -70,7 +70,7 @@
                     安全登录
                 </button>
 				<div class="text-center mt-4">
-                    <span class="text-[11px] md:text-xs text-gray-400 font-mono tracking-widest">v8.7.5</span>
+                    <span class="text-[11px] md:text-xs text-gray-400 font-mono tracking-widest">{{ appVersion }}</span>
                 </div>
             </div>
         </div>
@@ -79,10 +79,18 @@
             <aside class="w-full md:w-56 h-auto md:h-full bg-gray-900 text-white flex flex-col shadow-xl z-20 shrink-0">
                 <div class="p-3 md:p-5 flex items-center justify-between md:justify-center border-b border-gray-800 shrink-0">
                     <span class="font-black text-base md:text-lg tracking-wider text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-indigo-400">Wenfxl Manager</span>
-					<span class="px-1.5 py-0.5 rounded bg-gray-800 border border-gray-700 text-[10px] text-gray-400 font-mono font-bold leading-none">v8.7.5</span>
-                    <button @click="logout" class="md:hidden text-gray-400 hover:text-red-400 text-xs flex items-center gap-1 font-bold bg-gray-800 px-2 py-1 rounded">
-                        <span>🚪</span> 退出
+                    <button v-if="updateInfo.hasUpdate" @click="promptUpdate" class="relative group flex items-center justify-center focus:outline-none transition-transform hover:scale-105 shrink-0 cursor-pointer" title="点击查看更新">
+                        <span class="absolute -top-1 -right-1 flex h-2.5 w-2.5 z-10">
+                            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                            <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
+                        </span>
+                        <span class="px-2 py-0.5 rounded bg-red-900/30 border border-red-500/50 text-[10px] text-red-400 font-mono font-bold leading-none shadow-[0_0_8px_rgba(239,68,68,0.2)]">
+                            🚀 {{ updateInfo.version }}
+                        </span>
                     </button>
+                    <span v-else class="px-1.5 py-0.5 rounded bg-gray-800 border border-gray-700 text-[10px] text-gray-400 font-mono font-bold leading-none shrink-0">
+                        {{ appVersion }}
+                    </span>
                 </div>
                 <nav class="flex flex-row md:flex-col overflow-x-auto md:overflow-y-auto px-2 py-2 md:px-3 md:py-4 gap-2 md:gap-0 md:space-y-1.5 hide-scrollbar shrink-0">
                     <button v-for="tab in tabs" :key="tab.id" @click="switchTab(tab.id)"
@@ -93,8 +101,11 @@
                     </button>
                 </nav>
                 <div class="hidden md:block p-4 border-t border-gray-800 shrink-0 mt-auto">
+                    <button @click="checkUpdate(true)" class="w-full flex items-center justify-center gap-2 text-xs text-blue-400 hover:text-blue-300 py-2 mb-2 rounded hover:bg-gray-800 transition border border-blue-900/30">
+                        <span>🔄</span>检查系统更新
+                    </button>
                     <button @click="logout" class="w-full flex items-center justify-center gap-2 text-sm text-gray-400 hover:text-red-400 py-2 rounded hover:bg-gray-800 transition">
-                        <span>🚪</span> 退出登录
+                        <span>🚪</span>退出登录
                     </button>
                 </div>
             </aside>

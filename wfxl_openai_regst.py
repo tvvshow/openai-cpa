@@ -13,6 +13,9 @@ import urllib.request
 import urllib.parse
 import subprocess
 import httpx
+import traceback
+import warnings
+import re
 from collections import deque
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, Header, Query, Request
 from fastapi.staticfiles import StaticFiles
@@ -27,6 +30,8 @@ from utils.config import reload_all_configs
 from utils import db_manager
 from utils.sub2api_client import Sub2APIClient
 
+
+warnings.filterwarnings("ignore", category=RuntimeWarning, module="trio")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
@@ -45,6 +50,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Wenfxl Codex Manager", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")
+GITHUB_REPO = "wenfxl/openai-cpa"
+CURRENT_VERSION = "v8.7.4"
 
 app.add_middleware(
     CORSMiddleware,
@@ -659,6 +666,56 @@ def api_luckmail_bulk_buy(req: LuckMailBulkBuyReq, token: str = Depends(verify_t
         return {"status": "success", "message": f"成功购买 {len(results)} 个邮箱！", "data": results}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+def _parse_version(v: str):
+    return [int(x) for x in re.findall(r'\d+', str(v))]
+
+@app.get("/api/system/check_update")
+async def check_update(token: str = Depends(verify_token)):
+    try:
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+        headers = {"Accept": "application/vnd.github.v3+json"}
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                resp = await client.get(url, headers=headers)
+            except httpx.TimeoutException:
+                return {"status": "error", "message": "连接 GitHub 超时，请检查网络或确认代理节点是否存活。"}
+            except httpx.RequestError as e:
+                return {"status": "error", "message": f"请求 GitHub 失败 (网络连通性问题)，国内建议直连: {str(e)}"}
+
+            if resp.status_code != 200:
+                return {"status": "error", "message": f"无法获取更新数据 (GitHub API 返回 HTTP {resp.status_code})"}
+
+        data = resp.json()
+        remote_version = data.get("tag_name", "")
+
+        try:
+            has_update = _parse_version(remote_version) > _parse_version(CURRENT_VERSION)
+        except Exception:
+            has_update = str(remote_version) > str(CURRENT_VERSION)
+
+        download_url = ""
+        assets = data.get("assets")
+        if assets and isinstance(assets, list) and len(assets) > 0:
+            download_url = assets[0].get("browser_download_url", "")
+        else:
+            download_url = data.get("zipball_url", "")
+
+        return {
+            "status": "success",
+            "has_update": has_update,
+            "remote_version": remote_version,
+            "changelog": data.get("body", "无更新日志"),
+            "download_url": download_url,
+            "html_url": data.get("html_url", "")
+        }
+
+    except Exception as e:
+        traceback.print_exc()
+        error_type = type(e).__name__
+        return {"status": "error", "message": f"检查更新发生未知异常: [{error_type}] {str(e)}"}
 
 
 @app.post("/api/start_check")

@@ -3,6 +3,7 @@ const { createApp } = Vue;
 createApp({
     data() {
         return {
+            appVersion: 'v8.7.6',
             isLoggedIn: !!localStorage.getItem('auth_token'),
             loginPassword: '',
             currentTab: 'console',
@@ -69,7 +70,8 @@ createApp({
 
             toasts: [],
             toastId: 0,
-            confirmModal: { show: false, message: '', resolve: null }
+            confirmModal: { show: false, message: '', resolve: null },
+            updateInfo: { hasUpdate: false, version: '', url: '', changelog: '' }
         };
     },
     mounted() {
@@ -152,6 +154,7 @@ createApp({
             this.fetchAccounts();
             this.initSSE();
             this.startStatsPolling();
+            this.checkUpdate();
         },
         startStatsPolling() {
             if(this.statsTimer) clearInterval(this.statsTimer);
@@ -807,6 +810,41 @@ createApp({
             } catch (err) {
                 this.showToast('网络请求异常', 'error');
             }
-        }
+        },
+        async checkUpdate(isManual = false) {
+            try {
+                const res = await this.authFetch('/api/system/check_update');
+                const data = await res.json();
+
+                if (data.status === 'success') {
+                    if (data.has_update) {
+                        this.updateInfo = {
+                            hasUpdate: true,
+                            version: data.remote_version,
+                            url: data.html_url || data.download_url || 'https://github.com/wenfxl/openai-cpa/releases/latest',
+                            changelog: data.changelog
+                        };
+                        // 只有用户主动点击时，才触发弹窗
+                        if (isManual) {
+                            this.promptUpdate();
+                        }
+                    } else if (isManual) {
+                        this.showToast("当前已是最新版本！", "success");
+                    }
+                } else {
+                    if (isManual) this.showToast(data.message || "检查更新失败", "error");
+                }
+            } catch (e) {
+                if (isManual) this.showToast("检查更新请求失败，请检查网络", "error");
+            }
+        },
+        async promptUpdate() {
+            if (!this.updateInfo.hasUpdate) return;
+            const msg = `🚀 发现新版本: ${this.updateInfo.version}\n\n📝 更新内容:\n${this.updateInfo.changelog}\n\n是否前往 GitHub 查看并下载更新？`;
+            const confirmed = await this.customConfirm(msg);
+            if (confirmed) {
+                window.open(this.updateInfo.url, '_blank');
+            }
+        },
     }
 }).mount('#app');
