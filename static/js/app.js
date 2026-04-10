@@ -3,7 +3,7 @@ const { createApp } = Vue;
 createApp({
     data() {
         return {
-            appVersion: 'v9.0.0',
+            appVersion: 'v9.0.1',
             isLoggedIn: !!localStorage.getItem('auth_token'),
             loginPassword: '',
             currentTab: window.location.hash.replace('#', '') || 'console',
@@ -653,6 +653,12 @@ createApp({
                 console.error("SSE 连接异常，浏览器将自动尝试重连...", event);
                 if (!this.isLoggedIn) {
                     this.evtSource.close();
+                }
+                if (this.isLoggedIn) {
+                    console.log("⏳ 准备在 3 秒后强制重新建立日志通道...");
+                    setTimeout(() => {
+                        this.initSSE(); // 手动重新调用自己，建立全新的连接
+                    }, 3000);
                 }
             };
         },
@@ -1370,7 +1376,8 @@ createApp({
             }
 
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}/api/cluster/view_ws?token=${this.authToken}`;
+            const token = localStorage.getItem('auth_token');
+            const wsUrl = `${protocol}//${window.location.host}/api/cluster/view_ws?token=${token}`;
 
             this.clusterWs = new WebSocket(wsUrl);
 
