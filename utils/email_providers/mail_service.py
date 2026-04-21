@@ -828,9 +828,28 @@ def get_oai_code(
                         sender = str(m_info.get("from", "")).lower()
                         detail = tm_service.get_email_detail(m_id)
                         subject = str(detail.get("subject", ""))
-
+                        a = detail.get("id", "")
                         if "openai" in sender or "openai" in subject.lower() or "chatgpt" in subject:
-                            code = _extract_otp_code(subject)
+                            raw_body = tm_service.get_message_body(detail.get("id", ""))
+                            clean_body = re.sub(r'<[^>]+>', ' ', raw_body)
+                            combined_text = subject + " \n " + clean_body
+
+                            code = None
+                            new_format = re.findall(r"enter this code:\s*(\d{6})", combined_text, re.I)
+                            if not new_format:
+                                new_format = re.findall(r"verification code to continue:\s*(\d{6})", combined_text,
+                                                        re.I)
+
+                            if new_format:
+                                code = new_format[-1]
+                            else:
+                                direct = re.findall(r"Your ChatGPT code is (\d{6})", combined_text, re.I)
+                                if direct:
+                                    code = direct[-1]
+                                else:
+                                    generic = re.findall(r"\b(\d{6})\b", combined_text)
+                                    if generic:
+                                        code = generic[-1]
                             if code:
                                 processed_mail_ids.add(m_id)
                                 print(f"\n[{cfg.ts()}] [SUCCESS] TemporaryMail ({mask_email(email)}) 邮箱提取成功: {code}")
