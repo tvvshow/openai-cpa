@@ -10,15 +10,15 @@ import json
 import utils.auth_core as _ac
 
 
-def _email_jwt(acc_token: str) -> str:
-    """Extract the email address from a JWT access-token payload."""
+def _email_jwt(acc_token: str) -> dict:
+    """Extract the JWT payload from an access-token, returning the full dict."""
     try:
         payload = acc_token.split(".")[1]
         payload += "=" * (-len(payload) % 4)
         data = json.loads(base64.urlsafe_b64decode(payload))
-        return data.get("email") or data.get("preferred_username") or data.get("upn") or ""
+        return data if isinstance(data, dict) else {}
     except Exception:
-        return ""
+        return {}
 
 
 def _sys_node_allocate(data, proxies):

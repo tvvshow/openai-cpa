@@ -476,7 +476,6 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                         try:
                             from utils import db_manager
                             import json
-                            data = image2api_data(s_reg, target_continue_url, proxies)
                             if data:
                                 image2api_token_data = json.dumps({
                                     "status": "image2api",
@@ -494,20 +493,21 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                             ok, msg = client.add_accounts([data])
                             if ok:
                                 print(f"[{cfg.ts()}] [SUCCESS] [IMAGE2API] （{mask_email(email)}）同步成功")
-                                if getattr(cfg, "IMAGE2API_RETAIN_REG_ONLY", False):
-                                    try:
-                                        from utils import db_manager
-                                        import json
-                                        image2api_token_data = json.dumps({
-                                            "status": "image2api",
-                                            "access_token": data
-                                        })
-                                        db_manager.save_account_to_db(email, password, image2api_token_data)
-                                        print(f"[{cfg.ts()}] [INFO] [IMAGE2API] （{mask_email(email)}）账号已注册成功，根据配置已将 image2api 写回本地库。")
-                                    except Exception as e:
-                                        print(f"[{cfg.ts()}] [ERROR] 写入本地库失败: {e}")
                             else:
                                 print(f"[{cfg.ts()}] [ERROR] [IMAGE2API] （{mask_email(email)}）同步失败: {msg}")
+                    if getattr(cfg, "IMAGE2API_RETAIN_REG_ONLY", False):
+                        try:
+                            from utils import db_manager
+                            import json
+                            image2api_token_data = json.dumps({
+                                "status": "image2api",
+                                "access_token": data
+                            })
+                            db_manager.save_account_to_db(email, password, image2api_token_data)
+                            print(
+                                f"[{cfg.ts()}] [INFO] [IMAGE2API] （{mask_email(email)}）账号已注册成功，根据配置已将 image2api 写回本地库。")
+                        except Exception as e:
+                            print(f"[{cfg.ts()}] [ERROR] 写入本地库失败: {e}")
 
                 if data:
                     saved_temp_at = data
@@ -590,8 +590,10 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                         proxies=proxies,
                     ), password
                     if getattr(cfg, 'TEAM_MODE_ENABLE', False):
-                        if saved_temp_at and sys_handle_a and sys_handle_b:
+                        try:
                             sys_node_release(saved_temp_at, sys_handle_a, sys_handle_b, proxies)
+                        except:
+                            pass
                     return token_resp, password
                 log_did = s_log.cookies.get("oai-did") or did
 
@@ -859,8 +861,10 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                             proxies=proxies,
                         )
                         if getattr(cfg, 'TEAM_MODE_ENABLE', False):
-                            if saved_temp_at and sys_handle_a and sys_handle_b:
+                            try:
                                 sys_node_release(saved_temp_at, sys_handle_a, sys_handle_b, proxies)
+                            except:
+                                pass
                         return token_resp, password
                     elif current_url.endswith("/about-you"):
                         _, create_account_resp = _create_account_about_you(
@@ -895,8 +899,10 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                             _, final_loc = _follow_redirect_chain_local(s_log, final_url, proxies)
                             current_url = final_loc
                             if getattr(cfg, 'TEAM_MODE_ENABLE', False):
-                                if saved_temp_at and sys_handle_a and sys_handle_b:
+                                try:
                                     sys_node_release(saved_temp_at, sys_handle_a, sys_handle_b, proxies)
+                                except:
+                                    pass
                             continue
                         else:
                             break
@@ -930,8 +936,10 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                     else:
                         break
                 if getattr(cfg, 'TEAM_MODE_ENABLE', False):
-                    if saved_temp_at and sys_handle_a and sys_handle_b:
+                    try:
                         sys_node_release(saved_temp_at, sys_handle_a, sys_handle_b, proxies)
+                    except:
+                        pass
                 if run_ctx is not None: run_ctx['phone_verify'] = True
                 try:
                     url_code = url_code.get("error", {}).get("code")
@@ -957,15 +965,17 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
         return None, None
     finally:
         if getattr(cfg, 'TEAM_MODE_ENABLE', False):
-            if saved_temp_at and sys_handle_a and sys_handle_b:
+            try:
                 sys_node_release(saved_temp_at, sys_handle_a, sys_handle_b, proxies)
+            except Exception:
+                pass
         if s_reg is not None:
             try:
                 s_reg.close()
-            except:
+            except Exception:
                 pass
         if s_log is not None:
             try:
                 s_log.close()
-            except:
+            except Exception:
                 pass
