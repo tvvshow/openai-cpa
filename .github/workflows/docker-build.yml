@@ -29,7 +29,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/wenfxl-codex-manager
+          images: wenfxl/wenfxl-codex-manager
           tags: |
             type=semver,pattern={{version}}
             type=raw,value=latest
