@@ -11,6 +11,8 @@ import socket
 import socks
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="trio")
 
+import utils.auth_core_patch  # noqa: F401,E402 — must precede all project imports
+
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
