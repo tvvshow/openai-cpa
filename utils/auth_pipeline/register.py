@@ -590,8 +590,10 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                         proxies=proxies,
                     ), password
                     if getattr(cfg, 'TEAM_MODE_ENABLE', False):
-                        if saved_temp_at and sys_handle_a and sys_handle_b:
+                        try:
                             sys_node_release(saved_temp_at, sys_handle_a, sys_handle_b, proxies)
+                        except:
+                            pass
                     return token_resp, password
                 log_did = s_log.cookies.get("oai-did") or did
 
@@ -859,8 +861,10 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                             proxies=proxies,
                         )
                         if getattr(cfg, 'TEAM_MODE_ENABLE', False):
-                            if saved_temp_at and sys_handle_a and sys_handle_b:
+                            try:
                                 sys_node_release(saved_temp_at, sys_handle_a, sys_handle_b, proxies)
+                            except:
+                                pass
                         return token_resp, password
                     elif current_url.endswith("/about-you"):
                         _, create_account_resp = _create_account_about_you(
@@ -895,8 +899,10 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                             _, final_loc = _follow_redirect_chain_local(s_log, final_url, proxies)
                             current_url = final_loc
                             if getattr(cfg, 'TEAM_MODE_ENABLE', False):
-                                if saved_temp_at and sys_handle_a and sys_handle_b:
+                                try:
                                     sys_node_release(saved_temp_at, sys_handle_a, sys_handle_b, proxies)
+                                except:
+                                    pass
                             continue
                         else:
                             break
@@ -930,8 +936,10 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
                     else:
                         break
                 if getattr(cfg, 'TEAM_MODE_ENABLE', False):
-                    if saved_temp_at and sys_handle_a and sys_handle_b:
+                    try:
                         sys_node_release(saved_temp_at, sys_handle_a, sys_handle_b, proxies)
+                    except:
+                        pass
                 if run_ctx is not None: run_ctx['phone_verify'] = True
                 try:
                     url_code = url_code.get("error", {}).get("code")
@@ -957,15 +965,17 @@ def run(proxy: Optional[str], run_ctx: dict = None) -> tuple:
         return None, None
     finally:
         if getattr(cfg, 'TEAM_MODE_ENABLE', False):
-            if saved_temp_at and sys_handle_a and sys_handle_b:
+            try:
                 sys_node_release(saved_temp_at, sys_handle_a, sys_handle_b, proxies)
+            except Exception:
+                pass
         if s_reg is not None:
             try:
                 s_reg.close()
-            except:
+            except Exception:
                 pass
         if s_log is not None:
             try:
                 s_log.close()
-            except:
+            except Exception:
                 pass
