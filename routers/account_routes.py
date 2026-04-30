@@ -778,15 +778,30 @@ async def import_team_accounts(req: ImportTeamReq, token: str = Depends(verify_t
     parsed_teams = []
     lines = req.raw_text.strip().split("\n")
     for line in lines:
-        acc_token = line.strip()
-        if not acc_token or len(acc_token) < 50: continue
+        line = line.strip()
+        if not line:
+            continue
+
+        # Support extended format: AT----ST----RT----client_id----account_id
+        # Separator is "----" (4 dashes), same convention as mailbox import
+        parts = line.split("----")
+        acc_token = parts[0].strip()
+        if not acc_token or len(acc_token) < 50:
+            continue
+
         jwt_data = email_jwt(acc_token)
         real_email = jwt_data.get("email", "") if isinstance(jwt_data, dict) else ""
-        parsed_teams.append({
+
+        entry = {
             "email": real_email if real_email else "未知邮箱(解析失败)",
             "access_token": acc_token,
+            "session_token": parts[1].strip() if len(parts) > 1 else "",
+            "refresh_token": parts[2].strip() if len(parts) > 2 else "",
+            "client_id": parts[3].strip() if len(parts) > 3 else "",
+            "account_id": parts[4].strip() if len(parts) > 4 else "",
             "status": 1
-        })
+        }
+        parsed_teams.append(entry)
     if not parsed_teams: return {"status": "error", "message": "未能识别出有效 Token"}
     count = db_manager.import_team_accounts(parsed_teams)
     return {"status": "success", "count": count}
@@ -805,3 +820,41 @@ async def clear_all_team_accounts(token: str = Depends(verify_token)):
     if db_manager.clear_all_team_accounts():
         return {"status": "success", "message": "Team 库已全部清空"}
     return {"status": "error", "message": "清空失败"}
+
+
+@router.post("/api/team_accounts/refresh_tokens")
+async def refresh_team_tokens(token: str = Depends(verify_token)):
+    """Force-refresh all team account tokens using ST/RT fallback chain."""
+    from utils.auth_core_patch import _ensure_access_token
+    from utils.config import PROXY_QUEUE
+    proxy = {}
+    try:
+        if not PROXY_QUEUE.empty():
+            proxy_str = PROXY_QUEUE.queue[0] if hasattr(PROXY_QUEUE, 'queue') else ""
+            if proxy_str:
+                proxy = {"all": proxy_str}
+    except Exception:
+        pass
+
+    teams = db_manager.get_team_accounts_page(page=1, page_size=10000)
+    if not teams.get("data"):
+        return {"status": "success", "message": "Team 库为空，无需刷新", "refreshed": 0, "failed": 0}
+
+    refreshed = 0
+    failed = 0
+    for team in teams["data"]:
+        try:
+            new_at = _ensure_access_token(team, proxy, force=True)
+            if new_at:
+                refreshed += 1
+            else:
+                failed += 1
+        except Exception:
+            failed += 1
+
+    return {
+        "status": "success" if refreshed > 0 else "warning",
+        "message": f"Token 刷新完成！成功: {refreshed} 个，失败: {failed} 个",
+        "refreshed": refreshed,
+        "failed": failed,
+    }

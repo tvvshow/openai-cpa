@@ -102,6 +102,10 @@ def init_db():
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         email TEXT,
                         access_token TEXT,
+                        session_token TEXT,
+                        refresh_token TEXT,
+                        client_id TEXT,
+                        account_id TEXT,
                         status INTEGER DEFAULT 1,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -118,8 +122,16 @@ def init_db():
             execute_sql(c, 'ALTER TABLE accounts ADD COLUMN push_time VARCHAR(50) DEFAULT NULL;')
         except Exception:
             pass
+        # Migrate existing team_accounts table: add token refresh columns
+    for col, col_type in [
+        ('access_token', 'TEXT'),
+        ('session_token', 'TEXT'),
+        ('refresh_token', 'TEXT'),
+        ('client_id', 'TEXT'),
+        ('account_id', 'TEXT'),
+    ]:
         try:
-            execute_sql(c, 'ALTER TABLE team_accounts ADD COLUMN access_token TEXT;')
+            execute_sql(c, f'ALTER TABLE team_accounts ADD COLUMN {col} {col_type};')
         except Exception:
             pass
     print(f"[{cfg.ts()}] [系统] 数据库模块初始化完成 (引擎: {DB_TYPE.upper()})")
@@ -673,9 +685,11 @@ def import_team_accounts(team_data_list: list) -> int:
             for td in team_data_list:
                 try:
                     execute_sql(c, '''
-                        INSERT OR IGNORE INTO team_accounts (email, access_token, status)
-                        VALUES (?, ?, ?)
-                    ''', (td['email'], td['access_token'], td.get('status', 1)))
+                        INSERT OR IGNORE INTO team_accounts (email, access_token, session_token, refresh_token, client_id, account_id, status)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''', (td['email'], td.get('access_token', ''), td.get('session_token', ''),
+                          td.get('refresh_token', ''), td.get('client_id', ''), td.get('account_id', ''),
+                          td.get('status', 1)))
                     if c.rowcount > 0:
                         count += 1
                 except Exception as ex:
@@ -711,7 +725,7 @@ def get_team_accounts_page(page: int = 1, page_size: int = 50, search: str = Non
             total = total_row['cnt'] if DB_TYPE == "mysql" else total_row[0]
             offset = (page - 1) * page_size
 
-            data_sql = f"SELECT id, email, access_token, status, created_at FROM team_accounts{where_clause} ORDER BY id DESC LIMIT ? OFFSET ?"
+            data_sql = f"SELECT id, email, access_token, session_token, refresh_token, client_id, account_id, status, created_at FROM team_accounts{where_clause} ORDER BY id DESC LIMIT ? OFFSET ?"
             data_params = tuple(params + [page_size, offset])
             execute_sql(c, data_sql, data_params)
             rows = c.fetchall()
@@ -751,7 +765,7 @@ def get_random_team_account() -> dict:
         with get_db_conn(as_dict=True) as conn:
             c = get_cursor(conn, as_dict=True)
             order_clause = "RAND()" if DB_TYPE == "mysql" else "RANDOM()"
-            sql = f"SELECT id, email, access_token FROM team_accounts WHERE status = 1 ORDER BY {order_clause} LIMIT 1"
+            sql = f"SELECT id, email, access_token, session_token, refresh_token, client_id, account_id FROM team_accounts WHERE status = 1 ORDER BY {order_clause} LIMIT 1"
             execute_sql(c, sql)
             row = c.fetchone()
             if row:
@@ -760,3 +774,41 @@ def get_random_team_account() -> dict:
     except Exception as e:
         print(f"[{cfg.ts()}] [ERROR] 随机提取 Team 账号失败: {e}")
         return None
+
+
+def update_team_account_tokens(team_id: int, access_token: str = None,
+                                session_token: str = None, refresh_token: str = None,
+                                client_id: str = None, account_id: str = None,
+                                status: int = None) -> bool:
+    """Update token fields for a team account after refresh."""
+    try:
+        with get_db_conn() as conn:
+            c = get_cursor(conn)
+            sets = []
+            params = []
+            if access_token is not None:
+                sets.append("access_token = ?")
+                params.append(access_token)
+            if session_token is not None:
+                sets.append("session_token = ?")
+                params.append(session_token)
+            if refresh_token is not None:
+                sets.append("refresh_token = ?")
+                params.append(refresh_token)
+            if client_id is not None:
+                sets.append("client_id = ?")
+                params.append(client_id)
+            if account_id is not None:
+                sets.append("account_id = ?")
+                params.append(account_id)
+            if status is not None:
+                sets.append("status = ?")
+                params.append(status)
+            if not sets:
+                return True
+            params.append(team_id)
+            execute_sql(c, f"UPDATE team_accounts SET {', '.join(sets)} WHERE id = ?", tuple(params))
+            return True
+    except Exception as e:
+        print(f"[{cfg.ts()}] [ERROR] 更新 Team Token 失败: {e}")
+        return False

@@ -2951,5 +2951,16 @@ createApp({
                 this.showToast('清空异常', 'error');
             }
         },
+        async refreshTeamTokens() {
+            try {
+                this.showToast('正在刷新所有 Team Token...', 'info');
+                const res = await this.authFetch('/api/team_accounts/refresh_tokens', { method: 'POST' });
+                const data = await res.json();
+                this.showToast(data.message || '刷新完成', data.status === 'success' ? 'success' : 'warning');
+                this.fetchTeamAccounts();
+            } catch (e) {
+                this.showToast('刷新Token异常', 'error');
+            }
+        },
     }
 }).mount('#app');

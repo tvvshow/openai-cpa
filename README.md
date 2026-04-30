@@ -10,7 +10,7 @@
 
 ## 与上游的区别
 
-1. **移除鉴权机制** — `auth_core` 编译二进制回退至 v13.1.0 版本（不含 `check_global_license`、`read_license_file`、`get_stable_hwid` 及远程验证端点），通过 `auth_core_patch.py` 以纯 Python 实现 v14.0.0 新增的 `email_jwt`、`sys_node_allocate`、`sys_node_release` 接口，保留全部业务功能。
+1. **移除鉴权机制** — `auth_core` 编译二进制回退至 v13.1.0 版本（不含 `check_global_license`、`read_license_file`、`get_stable_hwid` 及远程验证端点），通过 `auth_core_patch.py` 以纯 Python 实现 v14.0.0 新增的 `email_jwt`、`sys_node_allocate`、`sys_node_release` 接口，保留全部业务功能。补丁模块还实现了来自参考仓库 [loLollipop/team-manage-refresh](https://github.com/loLollipop/team-manage-refresh) 的 Token 自动刷新链路（session_token / refresh_token 回退）、错误码检测（`token_invalidated` / `account_deactivated`）、会话隔离等功能。
 2. **品牌标识替换** — 启动日志、前端标题、导航栏等处的上游品牌替换为本项目标识。
 3. **默认值替换** — 集群密钥 `wenfxl666` → `codex2026`、数据库名 `wenfxl_manager` → `codex_manager`、webhook 密钥 `wenfxl_secret_key` → `codex_secret_key`（已有配置文件不受影响，仅影响首次生成）。
 4. **更新检查重定向** — 版本检查与更新下载链接指向本 Fork 仓库 `tvvshow/openai-cpa`。
@@ -157,6 +157,20 @@ docker compose down
 3. `clash_proxy_pool.api_url`：Clash 控制接口。
 4. `raw_proxy_pool.enable`：启用原始代理池。
 5. `raw_proxy_pool.proxy_list`：自定义代理列表。
+
+### Team 团队账号库
+
+Team 库用于配合注册流程，自动将新注册账号邀请加入 ChatGPT Team 工作区。
+
+**导入格式**（每行一个，用 `----` 分隔）：
+
+| 格式 | 说明 |
+|------|------|
+| `AT` | 仅 access_token（过期后无法自动刷新） |
+| `AT----ST` | access_token + session_token（可通过 ST 刷新 AT） |
+| `AT----ST----RT----client_id----account_id` | 全量凭证（可通过 RT 或 ST 自动刷新 AT） |
+
+**Token 自动刷新**：系统在分配 Team 账号时自动检测 AT 是否过期，按 RT → ST 的优先级尝试刷新。也可在 Team 库页面点击"刷新Token"按钮手动触发全量刷新。
 
 ## 项目结构（核心）
 
