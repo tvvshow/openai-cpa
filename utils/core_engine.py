@@ -1538,12 +1538,13 @@ def main() -> None:
 class RegEngine:
     """GUI 用控制类，封装线程/协程生命周期。"""
     def __init__(self):
-        self.thread_stop_event = threading.Event()
-        self.async_stop_event  = None
-        self.current_thread    = None
-        self.loop              = None
-        self._force_stopped    = False
-        self._executor         = None
+        self.thread_stop_event  = threading.Event()
+        self.async_stop_event   = None
+        self.current_thread     = None
+        self.loop               = None
+        self._force_stopped     = False
+        self._executor          = None
+        self.maintenance_thread = None
 
     def _ensure_executor(self, max_workers=None):
         if self._executor is None:
@@ -1561,7 +1562,8 @@ class RegEngine:
             self.loop.close()
             self.loop = None
         self.async_stop_event = None
-        self._shutdown_executor()
+        if self.current_thread is threading.current_thread():
+            self._shutdown_executor()
 
     def start_normal(self, args):
         if self.is_running():
@@ -1569,8 +1571,9 @@ class RegEngine:
         self._force_stopped = False
         cfg.GLOBAL_STOP = False
         cfg.POOL_EXHAUSTED = False
-        self.thread_stop_event.clear()
-        args.check_stop = lambda: self.thread_stop_event.is_set()
+        self.thread_stop_event = threading.Event()
+        current_evt = self.thread_stop_event
+        args.check_stop = lambda: current_evt.is_set()
         self._ensure_executor()
         self.current_thread = threading.Thread(
             target=self._run_normal_in_thread,
@@ -1585,20 +1588,20 @@ class RegEngine:
         self._force_stopped = False
         cfg.GLOBAL_STOP = False
         cfg.POOL_EXHAUSTED = False
-        self.thread_stop_event.clear()
+        self.thread_stop_event = threading.Event()
         self._ensure_executor()
         self.current_thread = threading.Thread(
             target=self._run_cpa_in_thread, args=(args,), daemon=True
         )
         self.current_thread.start()
-        
+
     def start_sub2api(self, args):
         if self.is_running():
             return
         self._force_stopped = False
         cfg.GLOBAL_STOP = False
         cfg.POOL_EXHAUSTED = False
-        self.thread_stop_event.clear()
+        self.thread_stop_event = threading.Event()
         self._ensure_executor()
         self.current_thread = threading.Thread(
             target=self._run_sub2api_in_thread, args=(args,), daemon=True

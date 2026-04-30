@@ -812,3 +812,27 @@ def update_team_account_tokens(team_id: int, access_token: str = None,
     except Exception as e:
         print(f"[{cfg.ts()}] [ERROR] 更新 Team Token 失败: {e}")
         return False
+
+def get_all_team_accounts() -> list:
+    try:
+        with get_db_conn(as_dict=True) as conn:
+            c = get_cursor(conn, as_dict=True)
+            execute_sql(c, "SELECT id, email, access_token FROM team_accounts WHERE status = 1")
+            rows = c.fetchall()
+            return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[{cfg.ts()}] [ERROR] 获取所有 Team 账号失败: {e}")
+        return []
+
+
+def delete_sys_kvs(keys: list) -> bool:
+    if not keys: return True
+    try:
+        with get_db_conn() as conn:
+            c = get_cursor(conn)
+            placeholders = ','.join(['?'] * len(keys))
+            execute_sql(c, f"DELETE FROM system_kv WHERE `key` IN ({placeholders})", tuple(keys))
+            return True
+    except Exception as e:
+        print(f"[{cfg.ts()}] [ERROR] 批量删除系统 KV 异常: {e}")
+        return False

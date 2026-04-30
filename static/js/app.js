@@ -129,6 +129,7 @@ createApp({
                 isLoading: false,
                 isGenerating: false
             },
+            isTestingTg: false,
             isLoadingSub2APIGroups: false,
             cloudAccounts: [],
             selectedCloud: [],
@@ -1705,6 +1706,83 @@ createApp({
                 this.showToast("网络请求异常", "error");
             } finally {
                 this.gmailOAuth.isLoading = false;
+            }
+        },
+        async uploadGmailCredentials() {
+            const fileInput = document.getElementById('gmail-creds-file');
+            if (!fileInput || !fileInput.files.length) {
+                this.showToast("请先选择凭据文件", "error");
+                return;
+            }
+            const file = fileInput.files[0];
+            const text = await file.text();
+            try {
+                JSON.parse(text);
+            } catch {
+                this.showToast("文件格式错误，请上传有效的 JSON 文件", "error");
+                return;
+            }
+            try {
+                const res = await this.authFetch('/api/gmail/upload_credentials', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: text })
+                });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.showToast("凭据上传成功", "success");
+                    fileInput.value = '';
+                } else {
+                    this.showToast(data.message || "上传失败", "error");
+                }
+            } catch {
+                this.showToast("网络请求异常", "error");
+            }
+        },
+        async clearGmailCredentials() {
+            const confirmed = await this.customConfirm("确定要清除已保存的 Gmail 凭据吗？\n清除后需重新上传才能使用 Gmail OAuth 功能。");
+            if (!confirmed) return;
+            try {
+                const res = await this.authFetch('/api/gmail/clear_credentials', { method: 'POST' });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.showToast("凭据已清除", "success");
+                } else {
+                    this.showToast(data.message || "清除失败", "error");
+                }
+            } catch {
+                this.showToast("网络请求异常", "error");
+            }
+        },
+        async clearGmailToken() {
+            const confirmed = await this.customConfirm("确定要清除已保存的 Gmail Token 吗？\n清除后需重新授权才能使用 Gmail 功能。");
+            if (!confirmed) return;
+            try {
+                const res = await this.authFetch('/api/gmail/clear_token', { method: 'POST' });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.showToast("Token 已清除", "success");
+                } else {
+                    this.showToast(data.message || "清除失败", "error");
+                }
+            } catch {
+                this.showToast("网络请求异常", "error");
+            }
+        },
+        async testTgNotification() {
+            this.isTestingTg = true;
+            try {
+                const res = await this.authFetch('/api/notify/test_tg', { method: 'POST' });
+                const data = await res.json();
+                if (data.status === 'success') {
+                    this.showToast("测试通知已发送，请检查 TG", "success");
+                } else {
+                    this.showToast(data.message || "发送失败", "error");
+                }
+            } catch {
+                this.showToast("网络请求异常", "error");
+            } finally {
+                this.isTestingTg = false;
             }
         },
         async restartSystem() {
