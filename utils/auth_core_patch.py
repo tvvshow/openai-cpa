@@ -4,7 +4,9 @@ Compatibility shim: adds v14.0.0 APIs to the v13.1.0 auth_core compiled binary.
 Importing this module monkey-patches ``utils.auth_core`` so that code written
 against v14.0.0 continues to work without the license-check machinery.
 
-Reverse-engineered from v14.0.0 Nuitka-compiled binary (string table analysis).
+API details verified against:
+- v14.0.0 Nuitka binary string table (function names, URL fragments, payload fields)
+- https://github.com/loLollipop/team-manage-refresh (production ChatGPT API reference)
 """
 import base64
 import json
@@ -39,24 +41,26 @@ def _email_jwt(acc_token: str) -> dict:
 def _get_chatgpt_session(access_token: str, proxies: dict) -> dict:
     """Use an OpenAI access_token to sign into ChatGPT and return the session JSON.
 
-    Flow (from binary): /api/auth/callback/openai -> /api/auth/session
+    Binary: /api/auth/callback/openai -> /api/auth/session -> extract accessToken
+    Reference: GET /api/auth/session with Cookie header for session_token refresh
     """
     if cffi_requests is None:
         return {}
     try:
-        # Step 1: OpenAI callback to establish chatgpt.com session cookies
+        # Establish chatgpt.com session via OpenAI callback
         callback_resp = cffi_requests.get(
             f"{_CHATGPT_BASE}/api/auth/callback/openai",
             headers={
                 "User-Agent": _UA,
                 "Authorization": f"Bearer {access_token}",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             },
             allow_redirects=True,
             proxies=proxies, **_REQ_KW)
         if callback_resp.status_code not in (200, 302):
             return {}
 
-        # Step 2: Get session which contains accessToken and account info
+        # Get session containing accessToken and account info
         session_resp = cffi_requests.get(
             f"{_CHATGPT_BASE}/api/auth/session",
             headers={"User-Agent": _UA},
@@ -69,34 +73,40 @@ def _get_chatgpt_session(access_token: str, proxies: dict) -> dict:
 
 
 def _get_account_id(access_token: str, proxies: dict) -> str:
-    """Get chatgpt_account_id via api.openai.com/profile or /auth.
+    """Get team chatgpt_account_id from the accounts check endpoint.
 
-    From binary: calls api.openai.com/profile then api.openai.com/auth,
-    extracts chatgpt_account_id from the response.
+    Binary: calls api.openai.com/profile + api.openai.com/auth
+    Reference (confirmed): GET /backend-api/accounts/check/v4-2023-04-27
+    Response: {accounts: {id: {account: {plan_type: "team", ...}}}}
     """
     if cffi_requests is None:
         return ""
     headers = {
-        "User-Agent": _UA,
         "Authorization": f"Bearer {access_token}",
         "Accept": "application/json",
     }
+    # Primary: backend-api accounts check (from reference repo)
     try:
-        resp = cffi_requests.get(
-            "https://api.openai.com/profile",
-            headers=headers, proxies=proxies, **_REQ_KW)
+        url = f"{_BACKEND_API}/accounts/check/v4-2023-04-27"
+        resp = cffi_requests.get(url, headers=headers,
+                                 proxies=proxies, **_REQ_KW)
         if resp.status_code == 200:
             data = resp.json()
-            # Try direct field
-            acc_id = data.get("chatgpt_account_id", "")
-            if acc_id:
-                return acc_id
+            accounts = data.get("accounts", {})
+            if isinstance(accounts, dict):
+                for aid, info in accounts.items():
+                    account = info.get("account", {})
+                    if account.get("plan_type") == "team":
+                        return aid
+                # Fallback: return first account id
+                for aid in accounts:
+                    return aid
     except Exception:
         pass
+    # Fallback: api.openai.com (from binary strings)
     try:
-        resp = cffi_requests.get(
-            "https://api.openai.com/auth",
-            headers=headers, proxies=proxies, **_REQ_KW)
+        resp = cffi_requests.get("https://api.openai.com/profile",
+                                 headers=headers, proxies=proxies, **_REQ_KW)
         if resp.status_code == 200:
             data = resp.json()
             acc_id = data.get("chatgpt_account_id", "")
@@ -131,15 +141,17 @@ def _get_team_admin_info(proxies: dict) -> tuple:
 def _make_chatgpt_headers(access_token: str, account_id: str = "") -> dict:
     """Build headers for ChatGPT backend-api requests.
 
-    From binary: Authorization, Bearer, chatgpt-account-id, Content-Type,
-    Referer (admin/members page), impersonate chrome110.
+    Binary: Authorization, Bearer, chatgpt-account-id, Content-Type
+    Reference: adds Origin, Accept-Language, Connection
     """
     h = {
-        "User-Agent": _UA,
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
         "Authorization": f"Bearer {access_token}",
         "Content-Type": "application/json",
-        "Accept": "application/json",
-        "Referer": "https://chatgpt.com/admin/members?tab=members",
+        "Origin": _CHATGPT_BASE,
+        "Referer": f"{_CHATGPT_BASE}/",
+        "Connection": "keep-alive",
     }
     if account_id:
         h["chatgpt-account-id"] = account_id
@@ -150,9 +162,8 @@ def _api_send_invite(admin_at: str, account_id: str,
                      email: str, proxies: dict) -> bool:
     """Send a team invite to the given email address.
 
-    From binary: POST /accounts/{account_id}/invites
-    Body: {email_addresses: [email], role: "standard-user",
-           seat_type: ..., usage_based: ..., resend_emails: ...}
+    Binary+Reference: POST /accounts/{account_id}/invites
+    Body: {email_addresses: [email], role: "standard-user", resend_emails: true}
     """
     if not cffi_requests or not admin_at or not account_id:
         return False
@@ -162,8 +173,6 @@ def _api_send_invite(admin_at: str, account_id: str,
         payload = {
             "email_addresses": [email],
             "role": "standard-user",
-            "seat_type": "standard-user",
-            "usage_based": False,
             "resend_emails": True,
         }
         resp = cffi_requests.post(url, json=payload, headers=headers,
@@ -178,8 +187,8 @@ def _api_get_invite_id(admin_at: str, account_id: str,
                        max_retries: int = 3) -> str:
     """Get the invite ID for a specific email from pending invites.
 
-    From binary: GET /accounts/{account_id}/invites, filter by email_address,
-    extract 'id'. Has retry logic (max_retries, attempt).
+    Binary: GET /accounts/{account_id}/invites, filter by email_address, extract id
+    Reference: response uses {items: [{email_address, id, ...}]}
     """
     if not cffi_requests or not admin_at or not account_id:
         return ""
@@ -195,11 +204,12 @@ def _api_get_invite_id(admin_at: str, account_id: str,
                     continue
                 return ""
             data = resp.json()
-            items = data if isinstance(data, list) else data.get("items", [])
-            for item in items:
-                inv_email = item.get("email_address", "")
-                if inv_email.lower() == email_address.lower():
-                    return str(item.get("id", ""))
+            items = data.get("items", data) if isinstance(data, dict) else data
+            if isinstance(items, list):
+                for item in items:
+                    inv_email = item.get("email_address", item.get("email", ""))
+                    if inv_email.lower() == email_address.lower():
+                        return str(item.get("id", ""))
             if attempt < max_retries - 1:
                 time.sleep(2)
         except Exception:
@@ -212,11 +222,25 @@ def _api_accept_invite(user_at: str, account_id: str,
                        invite_id: str, proxies: dict) -> bool:
     """Accept a team invite using the new user's access token.
 
-    From binary: POST /accounts/{account_id}/invites/{invite_id}/accept
-    Also tries /invites/{invite_id}/accept as alt_url fallback.
+    Binary: POST /accounts/{account_id}/invites/{invite_id}/accept (primary)
+           /invites/{invite_id}/accept (alt_url fallback)
+    The new user signs into chatgpt.com first, then accepts.
     """
     if not cffi_requests or not user_at or not invite_id:
         return False
+    # Establish chatgpt session for the new user first
+    try:
+        callback_resp = cffi_requests.get(
+            f"{_CHATGPT_BASE}/api/auth/callback/openai",
+            headers={
+                "Authorization": f"Bearer {user_at}",
+                "Accept": "*/*",
+            },
+            allow_redirects=True,
+            proxies=proxies, **_REQ_KW)
+    except Exception:
+        pass
+
     headers = _make_chatgpt_headers(user_at, account_id)
     # Primary URL
     try:
@@ -227,7 +251,7 @@ def _api_accept_invite(user_at: str, account_id: str,
             return True
     except Exception:
         pass
-    # Fallback URL
+    # Fallback URL (from binary alt_url)
     try:
         url = f"{_BACKEND_API}/invites/{invite_id}/accept"
         resp = cffi_requests.post(url, json={}, headers=headers,
@@ -241,36 +265,62 @@ def _api_remove_member(admin_at: str, account_id: str,
                        email: str, proxies: dict) -> bool:
     """Remove a member from the team by email.
 
-    From binary: GET /accounts/{account_id}/users?limit=100&offset=0
-    then find user by email, DELETE /accounts/{account_id}/users/{user_id}
+    Binary+Reference: GET /accounts/{id}/users?limit=N&offset=0
+    Response: {items: [{email, id, ...}], total: N}
+    Then: DELETE /accounts/{id}/users/{user_id}
     """
     if not cffi_requests or not admin_at or not account_id:
         return False
     try:
-        # List users
         headers = _make_chatgpt_headers(admin_at, account_id)
-        url = f"{_BACKEND_API}/accounts/{account_id}/users?limit=100&offset=0"
-        resp = cffi_requests.get(url, headers=headers,
-                                 proxies=proxies, **_REQ_KW)
-        if resp.status_code != 200:
-            return False
-        data = resp.json()
-        items = data.get("items", data) if isinstance(data, dict) else data
-        if not isinstance(items, list):
-            return False
-        # Find target user
-        for user in items:
-            user_email = user.get("email", "").lower()
-            if user_email == email.lower():
-                user_id = user.get("id", user.get("user_id", ""))
-                if not user_id:
-                    continue
-                # Delete the user
-                del_url = f"{_BACKEND_API}/accounts/{account_id}/users/{user_id}"
-                del_resp = cffi_requests.delete(del_url, headers=headers,
-                                                proxies=proxies, **_REQ_KW)
-                return del_resp.status_code in (200, 204)
+        # Paginate through all members
+        offset = 0
+        limit = 50
+        while True:
+            url = f"{_BACKEND_API}/accounts/{account_id}/users?limit={limit}&offset={offset}"
+            resp = cffi_requests.get(url, headers=headers,
+                                     proxies=proxies, **_REQ_KW)
+            if resp.status_code != 200:
+                return False
+            data = resp.json()
+            items = data.get("items", []) if isinstance(data, dict) else data
+            total = data.get("total", 0) if isinstance(data, dict) else len(items)
+            if not isinstance(items, list):
+                return False
+            for user in items:
+                user_email = user.get("email", "").lower()
+                if user_email == email.lower():
+                    user_id = user.get("id", user.get("user_id", ""))
+                    if not user_id:
+                        return False
+                    del_url = f"{_BACKEND_API}/accounts/{account_id}/users/{user_id}"
+                    del_resp = cffi_requests.delete(del_url, headers=headers,
+                                                   proxies=proxies, **_REQ_KW)
+                    return del_resp.status_code in (200, 204)
+            offset += limit
+            if offset >= total:
+                break
         return False
+    except Exception:
+        return False
+
+
+def _api_delete_invite(admin_at: str, account_id: str,
+                       email: str, proxies: dict) -> bool:
+    """Revoke a pending invite.
+
+    Reference: DELETE /accounts/{account_id}/invites
+    Body: {email_address: email}
+    """
+    if not cffi_requests or not admin_at or not account_id:
+        return False
+    try:
+        url = f"{_BACKEND_API}/accounts/{account_id}/invites"
+        headers = _make_chatgpt_headers(admin_at, account_id)
+        payload = {"email_address": email}
+        resp = cffi_requests.delete(url, json=payload, headers=headers,
+                                    proxies=proxies, **_REQ_KW)
+        return resp.status_code in (200, 204)
     except Exception:
         return False
 
@@ -278,13 +328,13 @@ def _api_remove_member(admin_at: str, account_id: str,
 def _sys_node_allocate(data: str, proxies) -> tuple:
     """Allocate a team seat for the newly registered user.
 
-    Reverse-engineered flow from v14.0.0 binary:
-    1. Pick a random team admin from team_accounts table
-    2. Get admin's chatgpt_account_id via api.openai.com/profile
-    3. Extract email from the new user's JWT
-    4. _api_send_invite(admin_at, account_id, email, proxies)
-    5. _api_get_invite_id(admin_at, account_id, email, proxies)
-    6. _api_accept_invite(user_at= data, account_id, invite_id, proxies)
+    Flow (binary + reference):
+    1. get_random_team_account() from DB
+    2. _get_account_id() to find admin's team account_id
+    3. Extract email from new user's JWT
+    4. _api_send_invite(admin_at, account_id, email)
+    5. _api_get_invite_id(admin_at, account_id, email)
+    6. _api_accept_invite(user_at=data, account_id, invite_id)
     7. Return (success, invite_id, chatgpt_account_id)
     """
     try:
@@ -317,11 +367,8 @@ def _sys_node_allocate(data: str, proxies) -> tuple:
 def _sys_node_release(temp_user_at: str, handle_a: str, handle_b: str, proxies) -> None:
     """Release a team seat by removing the user from the team.
 
-    Reverse-engineered from v14.0.0 binary:
-    1. Get admin's access_token from team_accounts
-    2. Use handle_b as chatgpt_account_id
-    3. Extract email from the user's JWT
-    4. _api_remove_member(admin_at, account_id, email, proxies)
+    handle_a = invite_id (unused for removal)
+    handle_b = chatgpt_account_id of the team
     """
     try:
         if not handle_b:
@@ -331,7 +378,6 @@ def _sys_node_release(temp_user_at: str, handle_a: str, handle_b: str, proxies) 
         email = jwt_data.get("email", "")
         if not email:
             return
-        # Get admin token from DB
         from utils import db_manager
         team = db_manager.get_random_team_account()
         if not team:
