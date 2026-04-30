@@ -37,7 +37,7 @@ gptmail_base: "https://your-domain.com" #是后端访问链接，不是前端访
 admin_auth: ""
 # [项目专属内存池邮箱配置]
 openai_cpa:
-  webhook_secret: "wenfxl_secret_key"
+  webhook_secret: "codex_secret_key"
 
 # [模式 "imap" 专属配置] (CF Catch-all 转发接收端)
 imap:
@@ -359,7 +359,7 @@ database:
     port: 3306
     user: "root"
     password: ""
-    db_name: "wenfxl_manager"
+    db_name: "codex_manager"
 
 team_mode:
   enable: false
@@ -374,7 +374,7 @@ max_log_lines: "500"
 #集群总控
 cluster_node_name: "NODE-1"
 cluster_master_url: ""
-cluster_secret: "wenfxl666"
+cluster_secret: "codex2026"
 
 # 是否放弃强行变道走无密码OTP
 disable_forced_takeover: true

@@ -23,7 +23,7 @@ class get_db_conn:
                 port=MYSQL_CFG.get('port', 3306),
                 user=MYSQL_CFG.get('user', 'root'),
                 password=MYSQL_CFG.get('password', ''),
-                database=MYSQL_CFG.get('db_name', 'wenfxl_manager'),
+                database=MYSQL_CFG.get('db_name', 'codex_manager'),
                 charset='utf8mb4'
             )
         else:

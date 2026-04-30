@@ -521,11 +521,11 @@ createApp({
                 if (!this.config.database) {
                     this.config.database = {
                         type: 'sqlite',
-                        mysql: { host: '127.0.0.1', port: 3306, user: 'root', password: '', db_name: 'wenfxl_manager' }
+                        mysql: { host: '127.0.0.1', port: 3306, user: 'root', password: '', db_name: 'codex_manager' }
                     };
                 }
                 if (!this.config.database.mysql) {
-                    this.config.database.mysql = { host: '127.0.0.1', port: 3306, user: 'root', password: '', db_name: 'wenfxl_manager' };
+                    this.config.database.mysql = { host: '127.0.0.1', port: 3306, user: 'root', password: '', db_name: 'codex_manager' };
                 }
 				if (!this.config.sub_domain_level) {
                     this.config.sub_domain_level = 1;
@@ -579,7 +579,7 @@ createApp({
                 this.rawProxyListStr = this.config.raw_proxy_pool.proxy_list.join('\n');
                 if (this.config.cluster_node_name === undefined) this.config.cluster_node_name = '';
                 if (this.config.cluster_master_url === undefined) this.config.cluster_master_url = '';
-                if (this.config.cluster_secret === undefined) this.config.cluster_secret = 'wenfxl666';
+                if (this.config.cluster_secret === undefined) this.config.cluster_secret = 'codex2026';
             } catch (e) {}
         },
         async saveConfig() {
@@ -1647,7 +1647,7 @@ createApp({
                         this.updateInfo = {
                             hasUpdate: true,
                             version: data.remote_version,
-                            url: data.html_url || data.download_url || 'https://github.com/wenfxl/openai-cpa/releases/latest',
+                            url: data.html_url || data.download_url || 'https://github.com/tvvshow/openai-cpa/releases/latest',
                             changelog: data.changelog
                         };
                         if (isManual) {

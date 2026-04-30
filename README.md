@@ -180,7 +180,7 @@ database:
     port: 3306
     user: "root"
     password: ""
-    db_name: "wenfxl_manager"
+    db_name: "codex_manager"
 ```
 
 ## 测试

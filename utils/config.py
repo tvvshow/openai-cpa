@@ -343,7 +343,7 @@ AI_ENABLE_PROFILE: bool = False
 TG_BOT: dict = {"enable": False, "token": "", "chat_id": ""}
 CLUSTER_NODE_NAME: str = ""
 CLUSTER_MASTER_URL: str = ""
-CLUSTER_SECRET: str = "wenfxl666"
+CLUSTER_SECRET: str = "codex2026"
 TEMPORAM_COOKIE: str = ""
 FVIA_TOKEN: str = ""
 TMAILOR_CURRENT_TOKEN: str = ""
@@ -468,7 +468,7 @@ def reload_all_configs(new_config_dict=None):
         "port": int(os.getenv("DB_PORT", _mysql_conf.get("port", 3306))),
         "user": os.getenv("DB_USER", _mysql_conf.get("user", "root")),
         "password": os.getenv("DB_PASS", _mysql_conf.get("password", "")),
-        "db_name": os.getenv("DB_NAME", _mysql_conf.get("db_name", "wenfxl_manager"))
+        "db_name": os.getenv("DB_NAME", _mysql_conf.get("db_name", "codex_manager"))
     }
 
     base_yaml_config["database"] = {"type": DB_TYPE, "mysql": MYSQL_CFG}
@@ -820,7 +820,7 @@ def reload_all_configs(new_config_dict=None):
 
     CLUSTER_NODE_NAME = str(_c.get("cluster_node_name", "")).strip()
     CLUSTER_MASTER_URL = str(_c.get("cluster_master_url", "")).strip().rstrip("/")
-    CLUSTER_SECRET = str(_c.get("cluster_secret", "wenfxl666")).strip()
+    CLUSTER_SECRET = str(_c.get("cluster_secret", "codex2026")).strip()
 
     REG_MODE = str(_c.get("reg_mode", "protocol")).strip().lower()
 

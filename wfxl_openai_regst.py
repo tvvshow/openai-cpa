@@ -38,7 +38,7 @@ async def lifespan(app: FastAPI):
     print("="*65 + "\n", flush=True)
     os._exit(0)
 
-app = FastAPI(title="Wenfxl Codex Manager", lifespan=lifespan)
+app = FastAPI(title="Codex Manager", lifespan=lifespan)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 拼接出 static 文件夹的绝对路径
@@ -95,7 +95,7 @@ def _worker_push_thread():
             cf_dict = getattr(core_engine.cfg, '_c', {})
             master_url = str(cf_dict.get("cluster_master_url", "")).strip()
             node_name = str(cf_dict.get("cluster_node_name", "")).strip() or "未命名节点"
-            secret = str(cf_dict.get("cluster_secret", "wenfxl666")).strip()
+            secret = str(cf_dict.get("cluster_secret", "codex2026")).strip()
 
             if not master_url:
                 if last_role != "master":
@@ -197,7 +197,7 @@ if __name__ == "__main__":
     except: pass
     print("=" * 65)
     print(f"[{core_engine.ts()}] [系统] OpenAI 全链路自动化生产与多维资源中转调度平台")
-    print(f"[{core_engine.ts()}] [系统] Author: (wenfxl)轩灵")
+    print(f"[{core_engine.ts()}] [系统] 版本: {cfg.APP_VERSION}")
     print(f"[{core_engine.ts()}] [系统] 如果遇到问题请更换域名解决，目前eu.cc，xyz，cn，edu.cc，fun，icu，top，bbroot.com，dpdns.org，qzz.io，info等常见域名均不可用，请更换为冷门域名")
     print(f"[{core_engine.ts()}] [系统] 根据官网披露消息：add-phone主要面向美国、荷兰、法国、西班牙、英国、波兰、德国、日本、印度、巴基斯坦、阿尔及利亚、乌兹别克斯坦和乌克兰的新用户推出。暂无其他地区的计划。")
     print(f"[{core_engine.ts()}] [系统] 根据官网披露消息：创建账号时验证手机号一个号码只能验证一个账号，创建API 密钥时也就是我们所说的拿凭证出现手机验证一个手机号可以验证3个账号。")

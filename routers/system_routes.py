@@ -258,7 +258,7 @@ async def save_config(new_config: dict, token: str = Depends(verify_token)):
 async def check_update(current_version: str, token: str = Depends(verify_token)):
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.get("https://api.github.com/repos/wenfxl/openai-cpa/releases/latest",
+            resp = await client.get("https://api.github.com/repos/tvvshow/openai-cpa/releases/latest",
                                     headers={"Accept": "application/vnd.github.v3+json"})
             if resp.status_code != 200: return {"status": "error",
                                                 "message": f"无法获取更新数据 (GitHub API 返回 HTTP {resp.status_code})"}
@@ -342,7 +342,7 @@ async def cluster_view(token: str = Depends(verify_token)):
 @router.post("/api/cluster/report")
 async def cluster_report(req: ClusterReportReq):
     cf_dict = getattr(core_engine.cfg, '_c', {})
-    if req.secret != str(cf_dict.get("cluster_secret", "wenfxl666")).strip(): return {"status": "error",
+    if req.secret != str(cf_dict.get("cluster_secret", "codex2026")).strip(): return {"status": "error",
                                                                                       "message": "密钥错误"}
 
     target_cmd = NODE_COMMANDS.get(req.node_name, "none")
@@ -365,7 +365,7 @@ async def cluster_report(req: ClusterReportReq):
 @router.websocket("/api/cluster/report_ws")
 async def ws_cluster_report(websocket: WebSocket, node_name: str, secret: str):
     await websocket.accept()
-    if secret != str(getattr(core_engine.cfg, '_c', {}).get("cluster_secret", "wenfxl666")).strip():
+    if secret != str(getattr(core_engine.cfg, '_c', {}).get("cluster_secret", "codex2026")).strip():
         await websocket.close(code=1008, reason="Secret Mismatch")
         return
     try:
@@ -409,7 +409,7 @@ async def cluster_view_ws(websocket: WebSocket, token: str = Query(None)):
 
 @router.post("/api/cluster/upload_accounts")
 def cluster_upload_accounts(req: ClusterUploadAccountsReq):
-    if req.secret != str(getattr(core_engine.cfg, '_c', {}).get("cluster_secret", "wenfxl666")).strip(): return {
+    if req.secret != str(getattr(core_engine.cfg, '_c', {}).get("cluster_secret", "codex2026")).strip(): return {
         "status": "error", "message": "密钥错误"}
     success_count = 0
     for acc in req.accounts:
