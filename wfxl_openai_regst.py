@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from utils import core_engine, db_manager
+import utils.config as cfg
 from utils.config import reload_all_configs
 from utils.log_stream_cache import RecentParsedLogCache
 
