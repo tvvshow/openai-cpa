@@ -1650,11 +1650,9 @@ createApp({
                             url: data.html_url || data.download_url || 'https://github.com/tvvshow/openai-cpa/releases/latest',
                             changelog: data.changelog
                         };
-                        if (isManual) {
-                            this.promptUpdate();
-                        }
+                        this.promptUpdate();
                     } else if (isManual) {
-                        this.showToast("当前已是最新版本！", "success");
+                        this.showToast(`当前已是最新版本 (${this.appVersion})`, "success");
                     }
                 } else {
                     if (isManual) this.showToast(data.message || "检查更新失败", "error");
@@ -1665,7 +1663,7 @@ createApp({
         },
         async promptUpdate() {
             if (!this.updateInfo.hasUpdate) return;
-            const msg = `🚀 发现新版本: ${this.updateInfo.version}\n\n📝 更新内容:\n${this.updateInfo.changelog}\n\n是否前往 GitHub 查看并下载更新？`;
+            const msg = `🚀 发现新版本: ${this.updateInfo.version}\n\n当前版本: ${this.appVersion}\n📝 更新内容:\n${this.updateInfo.changelog}\n\n是否前往 GitHub 查看并下载更新？`;
             const confirmed = await this.customConfirm(msg);
             if (confirmed) {
                 window.open(this.updateInfo.url, '_blank');

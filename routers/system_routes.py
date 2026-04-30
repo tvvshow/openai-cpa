@@ -257,11 +257,27 @@ async def save_config(new_config: dict, token: str = Depends(verify_token)):
 @router.get("/api/system/check_update")
 async def check_update(current_version: str, token: str = Depends(verify_token)):
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        # Use configured proxy if available (Docker containers may need proxy to reach GitHub)
+        proxy_url = None
+        if not cfg.PROXY_QUEUE.empty():
+            try:
+                proxy_url = cfg.PROXY_QUEUE.queue[0] if hasattr(cfg.PROXY_QUEUE, 'queue') else None
+            except Exception:
+                pass
+        if not proxy_url and cfg.DEFAULT_PROXY:
+            proxy_url = cfg.DEFAULT_PROXY
+
+        client_kwargs = {"timeout": 20.0}
+        if proxy_url:
+            client_kwargs["proxies"] = proxy_url
+
+        async with httpx.AsyncClient(**client_kwargs) as client:
             resp = await client.get("https://api.github.com/repos/tvvshow/openai-cpa/releases/latest",
-                                    headers={"Accept": "application/vnd.github.v3+json"})
-            if resp.status_code != 200: return {"status": "error",
-                                                "message": f"无法获取更新数据 (GitHub API 返回 HTTP {resp.status_code})"}
+                                   headers={"Accept": "application/vnd.github.v3+json",
+                                            "User-Agent": "CodexManager-UpdateCheck"})
+        if resp.status_code != 200:
+            return {"status": "error",
+                    "message": f"无法获取更新数据 (GitHub API 返回 HTTP {resp.status_code})，可能需要配置代理"}
         data = resp.json()
         remote_version = data.get("tag_name", "")
 
@@ -272,10 +288,13 @@ async def check_update(current_version: str, token: str = Depends(verify_token))
         assets = data.get("assets")
         download_url = assets[0].get("browser_download_url", "") if assets else data.get("zipball_url", "")
         return {"status": "success", "has_update": has_update, "remote_version": remote_version,
+                "current_version": current_version,
                 "changelog": data.get("body", "无更新日志"), "download_url": download_url,
                 "html_url": data.get("html_url", "")}
+    except httpx.TimeoutException:
+        return {"status": "error", "message": "检查更新超时 (20秒)，GitHub API 无法访问，请检查网络或配置代理"}
     except Exception as e:
-        return {"status": "error", "message": f"检查更新发生未知异常: {str(e)}"}
+        return {"status": "error", "message": f"检查更新发生异常: {str(e)}"}
 
 @router.post("/api/logs/clear")
 async def clear_backend_logs(token: str = Depends(verify_token)):
