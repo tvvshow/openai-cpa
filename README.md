@@ -1,8 +1,21 @@
-# 文风轩灵 Codex 管理系统
+# Codex Manager
 
 一个面向多节点场景的可视化调度平台，用于统一管理注册任务、邮箱验证码通道、代理切换、云端仓库补货与本地库存。
 
 > 仅可用于你拥有或已获得明确授权的系统环境。
+
+## 致谢
+
+本项目基于 [wenfxl/openai-cpa](https://github.com/wenfxl/openai-cpa) 开发，感谢原作者的贡献。上游仓库持续更新注册流程与功能修复，本 Fork 在同步上游业务代码的同时做了以下定制化调整。
+
+## 与上游的区别
+
+1. **移除鉴权机制** — `auth_core` 编译二进制回退至 v13.1.0 版本（不含 `check_global_license`、`read_license_file`、`get_stable_hwid` 及远程验证端点），通过 `auth_core_patch.py` 以纯 Python 实现 v14.0.0 新增的 `email_jwt`、`sys_node_allocate`、`sys_node_release` 接口，保留全部业务功能。
+2. **品牌标识替换** — 启动日志、前端标题、导航栏等处的上游品牌替换为本项目标识。
+3. **默认值替换** — 集群密钥 `wenfxl666` → `codex2026`、数据库名 `wenfxl_manager` → `codex_manager`、webhook 密钥 `wenfxl_secret_key` → `codex_secret_key`（已有配置文件不受影响，仅影响首次生成）。
+4. **更新检查重定向** — 版本检查与更新下载链接指向本 Fork 仓库 `tvvshow/openai-cpa`。
+5. **Docker 镜像** — 使用 `pestxo/wenfxl-codex-manager`，通过 GitHub Actions 自动构建（tag 触发）。
+6. **上游项目链接保留** — 前端配置页面中指向上游独立项目（cloudflare_temp_email、freemail、cloud-mail、openai-cpa-email）的链接保持不变。
 
 ## 项目简介
 
@@ -149,21 +162,22 @@ docker compose down
 
 ```text
 .
-├── wfxl_openai_regst.py       # 服务入口
-├── global_state.py            # 全局状态与引擎实例
-├── routers/                   # 路由层（系统、账户、服务、短信）
+├── wfxl_openai_regst.py     # 服务入口
+├── global_state.py           # 全局状态与引擎实例
+├── routers/                  # 路由层（系统、账户、服务、短信）
 ├── utils/
-│   ├── core_engine.py         # 调度核心（模式主循环、并发执行）
-│   ├── config.py              # 配置加载与热更新
-│   ├── db_manager.py          # SQLite/MySQL 双引擎数据库适配
-│   ├── proxy_manager.py       # Clash/代理池切换
-│   ├── auth_pipeline/         # 注册流程与认证流程
-│   ├── email_providers/       # 邮箱后端实现
-│   └── integrations/          # 外部平台集成（Sub2API、TG、短信等）
-├── static/                    # 前端静态资源
-├── index.html                 # 控制台页面
-├── config.example.yaml        # 配置模板
-└── tests/                     # 回归测试
+│   ├── core_engine.py        # 调度核心（模式主循环、并发执行）
+│   ├── config.py             # 配置加载与热更新
+│   ├── db_manager.py         # SQLite/MySQL 双引擎数据库适配
+│   ├── proxy_manager.py      # Clash/代理池切换
+│   ├── auth_core_patch.py    # v14 新增 API 的纯 Python 兼容实现
+│   ├── auth_pipeline/        # 注册流程与认证流程
+│   ├── email_providers/      # 邮箱后端实现
+│   └── integrations/         # 外部平台集成（Sub2API、TG、短信等）
+├── static/                   # 前端静态资源
+├── index.html                # 控制台页面
+├── config.example.yaml       # 配置模板
+└── tests/                    # 回归测试
 ```
 
 ## 数据存储
@@ -234,5 +248,7 @@ python -m pytest tests/test_log_stream_cache.py -v
 ## 许可与使用说明
 
 本项目采用 `CC BY-NC 4.0`（署名-非商业）协议。禁止未授权商业化使用。二次分发或修改需保留原作者署名并标注来源。
+
+上游仓库：[wenfxl/openai-cpa](https://github.com/wenfxl/openai-cpa)
 
 如需查看完整协议，请阅读仓库内 `LICENSE` 文件。
