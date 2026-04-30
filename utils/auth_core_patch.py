@@ -13,11 +13,20 @@ v14.4.36: added token refresh (session_token / refresh_token), ensure_access_tok
           account_deactivated), session isolation per identity, extended DB schema.
 """
 import base64
+import io
 import json
+import os
+import sys
 import time
 import threading
 
-import utils.auth_core as _ac
+# Suppress the auth_core binary's startup banner (hardcoded branding)
+_prev_stdout, _prev_stderr = sys.stdout, sys.stderr
+sys.stdout, sys.stderr = io.StringIO(), io.StringIO()
+try:
+    import utils.auth_core as _ac
+finally:
+    sys.stdout, sys.stderr = _prev_stdout, _prev_stderr
 
 try:
     from curl_cffi import requests as cffi_requests
