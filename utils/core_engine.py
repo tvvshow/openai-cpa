@@ -1609,9 +1609,10 @@ class RegEngine:
                     cfg.PROXY_QUEUE.task_done()
                 elif clash_proxy_item is not None:
                     cfg.PROXY_QUEUE.put(clash_proxy_item)
-            # Sleep between cycles
-            for _ in range(60):
-                if current_evt.is_set() or getattr(cfg, 'GLOBAL_STOP', False):
+                    cfg.PROXY_QUEUE.task_done()
+            for _ in range(180):
+                if self.thread_stop_event.is_set() or getattr(cfg, 'GLOBAL_STOP', False):
+                    print(f"[{cfg.ts()}] [系统] 收到停止信号，智能清洁线程安全退出。")
                     return
                 time.sleep(1)
 
@@ -1718,7 +1719,7 @@ class RegEngine:
         self._force_stopped = False
         cfg.GLOBAL_STOP = False
         cfg.POOL_EXHAUSTED = False
-        self.thread_stop_event.clear()
+        self.thread_stop_event = threading.Event()
         self._ensure_executor()
         self.current_thread = threading.Thread(
             target=self._run_check_in_thread, args=(args,), daemon=True
