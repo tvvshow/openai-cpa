@@ -10,12 +10,14 @@
 
 ## 与上游的区别
 
-1. **移除鉴权机制** — `auth_core` 编译二进制回退至 v13.1.0 版本（不含 `check_global_license`、`read_license_file`、`get_stable_hwid` 及远程验证端点），通过 `auth_core_patch.py` 以纯 Python 实现 v14.0.0 新增的 `email_jwt`、`sys_node_allocate`、`sys_node_release` 接口，保留全部业务功能。补丁模块还实现了来自参考仓库 [loLollipop/team-manage-refresh](https://github.com/loLollipop/team-manage-refresh) 的 Token 自动刷新链路（session_token / refresh_token 回退）、错误码检测（`token_invalidated` / `account_deactivated`）、会话隔离等功能。
+1. **移除鉴权机制** — `auth_core` 编译二进制回退至 v13.1.0 版本（不含 `check_global_license`、`read_license_file`、`get_stable_hwid` 及远程验证端点），通过 `auth_core_patch.py` 以纯 Python 实现上游 v14.0.0 ~ v14.2.1 新增的全部 18 个业务函数（包括 `email_jwt`、`sys_node_allocate`、`sys_node_release`、`sys_node_bulk_silent`、`_api_send_invite`、`_api_clear_all_seats_silent` 等），保留全部业务功能。补丁模块还实现了来自参考仓库 [loLollipop/team-manage-refresh](https://github.com/loLollipop/team-manage-refresh) 的 Token 自动刷新链路（session_token / refresh_token 回退）、错误码检测（`token_invalidated` / `account_deactivated`）、会话隔离等功能。
 2. **品牌标识替换** — 启动日志、前端标题、导航栏等处的上游品牌替换为本项目标识。
 3. **默认值替换** — 集群密钥 `wenfxl666` → `codex2026`、数据库名 `wenfxl_manager` → `codex_manager`、webhook 密钥 `wenfxl_secret_key` → `codex_secret_key`（已有配置文件不受影响，仅影响首次生成）。
 4. **更新检查重定向** — 版本检查与更新下载链接指向本 Fork 仓库 `tvvshow/openai-cpa`。
 5. **Docker 镜像** — 使用 `pestxo/wenfxl-codex-manager`，通过 GitHub Actions 自动构建（tag 触发）。
 6. **上游项目链接保留** — 前端配置页面中指向上游独立项目（cloudflare_temp_email、freemail、cloud-mail、openai-cpa-email）的链接保持不变。
+7. **Cloudflare 基础设施管理** — 新增一键式 CF 域名托管、邮件服务激活、Worker 部署、Catch-All 路由配置的前端面板和后端 API（同步自上游 v14.2.0）。
+8. **Image2API 模式** — 注册完成后自动提取 access_token 并推送到第三方图片生成服务 [ChatGpt-Image-Studio](https://github.com/peiyizhi0724/ChatGpt-Image-Studio)，支持账号推送、状态更新、批量刷新等操作。
 
 ## 项目简介
 
@@ -157,6 +159,15 @@ docker compose down
 3. `clash_proxy_pool.api_url`：Clash 控制接口。
 4. `raw_proxy_pool.enable`：启用原始代理池。
 5. `raw_proxy_pool.proxy_list`：自定义代理列表。
+
+### Image2API 模式
+
+对接第三方图片生成服务 [ChatGpt-Image-Studio](https://github.com/peiyizhi0724/ChatGpt-Image-Studio)，注册完成后自动提取 access_token 并推送。
+
+1. `image2api_mode.enable`：是否启用 Image2API 模式。
+2. `image2api_mode.api_url`：ChatGpt-Image-Studio 服务地址（如 `http://127.0.0.1:8080`）。
+3. `image2api_mode.api_key`：ChatGpt-Image-Studio 的 Bearer Auth Key。
+4. `image2api_mode.retain_reg_only`：是否仅保留注册成功的账号到本地库。
 
 ### Team 团队账号库
 
