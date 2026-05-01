@@ -670,6 +670,7 @@ def _sys_node_release(temp_user_at: str, handle_a: str, handle_b: str, proxies) 
 def _api_clear_all_seats_silent(admin_at: str, account_id: str, proxies: dict) -> int:
     """Remove all members and revoke all pending invites from a team.
 
+    Uses ThreadPoolExecutor for concurrent deletion (v14.2.1 upstream pattern).
     Returns the number of cleared items (members + invites).
     """
     if not cffi_requests or not admin_at or not account_id:
@@ -677,8 +678,19 @@ def _api_clear_all_seats_silent(admin_at: str, account_id: str, proxies: dict) -
     total_cleared = 0
     headers = _make_chatgpt_headers(admin_at, account_id)
 
-    # 1. Remove all members (paginate)
+    def _do_delete(url, json_body=None):
+        try:
+            if json_body:
+                r = cffi_requests.delete(url, json=json_body, headers=headers, proxies=proxies, **_REQ_KW)
+            else:
+                r = cffi_requests.delete(url, headers=headers, proxies=proxies, **_REQ_KW)
+            return r.status_code in (200, 204)
+        except Exception:
+            return False
+
+    # 1. Remove all members (paginate, concurrent delete)
     try:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         offset = 0
         limit = 100
         while True:
@@ -691,21 +703,25 @@ def _api_clear_all_seats_silent(admin_at: str, account_id: str, proxies: dict) -
             total = data.get("total", 0) if isinstance(data, dict) else len(items)
             if not isinstance(items, list) or not items:
                 break
+            delete_tasks = []
             for user in items:
                 user_id = user.get("id", user.get("user_id", ""))
                 if not user_id:
                     continue
                 del_url = f"{_BACKEND_API}/accounts/{account_id}/users/{user_id}"
-                del_resp = cffi_requests.delete(del_url, headers=headers, proxies=proxies, **_REQ_KW)
-                if del_resp.status_code in (200, 204):
-                    total_cleared += 1
+                delete_tasks.append(del_url)
+            with ThreadPoolExecutor(max_workers=min(len(delete_tasks), 8)) as executor:
+                futures = {executor.submit(_do_delete, u): u for u in delete_tasks}
+                for f in as_completed(futures):
+                    if f.result():
+                        total_cleared += 1
             offset += limit
             if offset >= total:
                 break
     except Exception:
         pass
 
-    # 2. Revoke all pending invites (paginate)
+    # 2. Revoke all pending invites (paginate, concurrent delete)
     try:
         offset = 0
         limit = 100
@@ -718,15 +734,18 @@ def _api_clear_all_seats_silent(admin_at: str, account_id: str, proxies: dict) -
             items = data.get("items", data) if isinstance(data, dict) else data
             if not isinstance(items, list) or not items:
                 break
+            delete_tasks = []
             for inv in items:
                 inv_email = inv.get("email_address", inv.get("email", ""))
                 if not inv_email:
                     continue
-                del_url = f"{_BACKEND_API}/accounts/{account_id}/invites"
-                del_resp = cffi_requests.delete(del_url, json={"email_address": inv_email},
-                                                 headers=headers, proxies=proxies, **_REQ_KW)
-                if del_resp.status_code in (200, 204):
-                    total_cleared += 1
+                delete_tasks.append(inv_email)
+            del_url = f"{_BACKEND_API}/accounts/{account_id}/invites"
+            with ThreadPoolExecutor(max_workers=min(len(delete_tasks), 8)) as executor:
+                futures = {executor.submit(_do_delete, del_url, {"email_address": e}): e for e in delete_tasks}
+                for f in as_completed(futures):
+                    if f.result():
+                        total_cleared += 1
             offset += limit
             if offset >= len(items):
                 break
@@ -740,22 +759,20 @@ def _sys_node_bulk_silent(proxies: dict = None, force_all: bool = False) -> None
     """Bulk maintenance: iterate all team accounts, ensure tokens are valid,
     and optionally clean up stale seats.
 
-    Called by the maintenance loop in core_engine.
-    force_all=True on first run to do a full cleanup pass.
+    Uses ThreadPoolExecutor for concurrent processing (v14.2.1 upstream pattern).
     """
     try:
         from utils import db_manager
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         team_accounts = db_manager.get_all_team_accounts()
         if not team_accounts:
             return
 
-        for team in team_accounts:
+        def _process_team(team):
             try:
-                # Ensure access token is valid
                 valid_at = _ensure_access_token(team, proxies, force=False)
                 if not valid_at:
-                    continue
-
+                    return
                 account_id = team.get("account_id", "")
                 if not account_id:
                     account_id = _get_account_id(valid_at, proxies)
@@ -766,16 +783,22 @@ def _sys_node_bulk_silent(proxies: dict = None, force_all: bool = False) -> None
                         except Exception:
                             pass
                 if not account_id:
-                    continue
-
-                # On force_all, clear all seats for a fresh start
+                    return
                 if force_all:
+                    should_delete = True
                     cleared = _api_clear_all_seats_silent(valid_at, account_id, proxies)
                     if cleared > 0:
                         print(f"[Team] Team {team['id']} 全局清洗完成，清理 {cleared} 个席位")
-
             except Exception:
-                continue
+                pass
+
+        with ThreadPoolExecutor(max_workers=min(len(team_accounts), 4)) as executor:
+            futures = [executor.submit(_process_team, t) for t in team_accounts]
+            for f in as_completed(futures):
+                try:
+                    f.result()
+                except Exception:
+                    pass
     except Exception:
         pass
 
