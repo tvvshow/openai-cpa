@@ -667,6 +667,120 @@ def _sys_node_release(temp_user_at: str, handle_a: str, handle_b: str, proxies) 
         pass
 
 
+def _api_clear_all_seats_silent(admin_at: str, account_id: str, proxies: dict) -> int:
+    """Remove all members and revoke all pending invites from a team.
+
+    Returns the number of cleared items (members + invites).
+    """
+    if not cffi_requests or not admin_at or not account_id:
+        return 0
+    total_cleared = 0
+    headers = _make_chatgpt_headers(admin_at, account_id)
+
+    # 1. Remove all members (paginate)
+    try:
+        offset = 0
+        limit = 100
+        while True:
+            url = f"{_BACKEND_API}/accounts/{account_id}/users?limit={limit}&offset={offset}"
+            resp = cffi_requests.get(url, headers=headers, proxies=proxies, **_REQ_KW)
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+            items = data.get("items", []) if isinstance(data, dict) else data
+            total = data.get("total", 0) if isinstance(data, dict) else len(items)
+            if not isinstance(items, list) or not items:
+                break
+            for user in items:
+                user_id = user.get("id", user.get("user_id", ""))
+                if not user_id:
+                    continue
+                del_url = f"{_BACKEND_API}/accounts/{account_id}/users/{user_id}"
+                del_resp = cffi_requests.delete(del_url, headers=headers, proxies=proxies, **_REQ_KW)
+                if del_resp.status_code in (200, 204):
+                    total_cleared += 1
+            offset += limit
+            if offset >= total:
+                break
+    except Exception:
+        pass
+
+    # 2. Revoke all pending invites (paginate)
+    try:
+        offset = 0
+        limit = 100
+        while True:
+            url = f"{_BACKEND_API}/accounts/{account_id}/invites?limit={limit}&offset={offset}"
+            resp = cffi_requests.get(url, headers=headers, proxies=proxies, **_REQ_KW)
+            if resp.status_code != 200:
+                break
+            data = resp.json()
+            items = data.get("items", data) if isinstance(data, dict) else data
+            if not isinstance(items, list) or not items:
+                break
+            for inv in items:
+                inv_email = inv.get("email_address", inv.get("email", ""))
+                if not inv_email:
+                    continue
+                del_url = f"{_BACKEND_API}/accounts/{account_id}/invites"
+                del_resp = cffi_requests.delete(del_url, json={"email_address": inv_email},
+                                                 headers=headers, proxies=proxies, **_REQ_KW)
+                if del_resp.status_code in (200, 204):
+                    total_cleared += 1
+            offset += limit
+            if offset >= len(items):
+                break
+    except Exception:
+        pass
+
+    return total_cleared
+
+
+def _sys_node_bulk_silent(proxies: dict = None, force_all: bool = False) -> None:
+    """Bulk maintenance: iterate all team accounts, ensure tokens are valid,
+    and optionally clean up stale seats.
+
+    Called by the maintenance loop in core_engine.
+    force_all=True on first run to do a full cleanup pass.
+    """
+    try:
+        from utils import db_manager
+        team_accounts = db_manager.get_all_team_accounts()
+        if not team_accounts:
+            return
+
+        for team in team_accounts:
+            try:
+                # Ensure access token is valid
+                valid_at = _ensure_access_token(team, proxies, force=False)
+                if not valid_at:
+                    continue
+
+                account_id = team.get("account_id", "")
+                if not account_id:
+                    account_id = _get_account_id(valid_at, proxies)
+                    if account_id:
+                        try:
+                            db_manager.update_team_account_tokens(
+                                team["id"], account_id=account_id)
+                        except Exception:
+                            pass
+                if not account_id:
+                    continue
+
+                # On force_all, clear all seats for a fresh start
+                if force_all:
+                    cleared = _api_clear_all_seats_silent(valid_at, account_id, proxies)
+                    if cleared > 0:
+                        print(f"[Team] Team {team['id']} 全局清洗完成，清理 {cleared} 个席位")
+
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+
 _ac.email_jwt = _email_jwt
 _ac.sys_node_allocate = _sys_node_allocate
 _ac.sys_node_release = _sys_node_release
+_ac.sys_node_bulk_silent = _sys_node_bulk_silent
