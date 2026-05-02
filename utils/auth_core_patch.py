@@ -785,7 +785,6 @@ def _sys_node_bulk_silent(proxies: dict = None, force_all: bool = False) -> None
                 if not account_id:
                     return
                 if force_all:
-                    should_delete = True
                     cleared = _api_clear_all_seats_silent(valid_at, account_id, proxies)
                     if cleared > 0:
                         print(f"[Team] Team {team['id']} 全局清洗完成，清理 {cleared} 个席位")
