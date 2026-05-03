@@ -610,7 +610,10 @@ def get_email_and_token(proxies: Any = None) -> tuple:
                     headers=headers, json=body,
                     proxies=mail_proxies, verify=_ssl_verify(), timeout=15,
                 )
-                res.raise_for_status()
+                if res.status_code >= 400:
+                    print(f"[{cfg.ts()}] [ERROR] cloudflare_temp_email API 返回 {res.status_code} (尝试 {attempt + 1}/5): {res.text[:200]}")
+                    time.sleep(2)
+                    continue
                 data = res.json()
                 if data and data.get("address"):
                     email = data["address"].strip()
@@ -618,10 +621,10 @@ def get_email_and_token(proxies: Any = None) -> tuple:
                     set_last_email(email)
                     print(f"[{cfg.ts()}] [INFO] cloudflare_temp_email成功获取临时邮箱: {mask_email(email)}")
                     return email, jwt
-                print(f"[{cfg.ts()}] [WARNING] cloudflare_temp_email邮箱申请失败 (尝试 {attempt + 1}/5): {res.text}")
+                print(f"[{cfg.ts()}] [WARNING] cloudflare_temp_email邮箱申请失败 (尝试 {attempt + 1}/5): {res.text[:200]}")
                 time.sleep(1)
             except Exception as e:
-                print(f"[{cfg.ts()}] [ERROR] cloudflare_temp_email邮箱注册网络异常，准备重试: {e}")
+                print(f"[{cfg.ts()}] [ERROR] cloudflare_temp_email邮箱注册网络异常 (尝试 {attempt + 1}/5): {e}")
                 time.sleep(2)
         return None, None
 
