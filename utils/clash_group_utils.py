@@ -1,5 +1,5 @@
 import re
-
+from typing import Optional
 
 def strip_group_decorations(text: str) -> str:
     raw = str(text or "").strip().lower()
@@ -8,7 +8,7 @@ def strip_group_decorations(text: str) -> str:
     return raw
 
 
-def resolve_group_name(proxy_map: dict, desired_group_name: str) -> str | None:
+def resolve_group_name(proxy_map: dict, desired_group_name: str) -> Optional[str]:
     desired = strip_group_decorations(desired_group_name)
     for key, value in (proxy_map or {}).items():
         if not (isinstance(value, dict) and 'all' in value):

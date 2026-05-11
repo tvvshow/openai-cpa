@@ -11,7 +11,7 @@ import subprocess
 import socket
 import socks
 warnings.filterwarnings("ignore", category=RuntimeWarning, module="trio")
-
+from typing import Optional
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -147,7 +147,7 @@ def _ensure_web_port_available(host: str, port: int) -> bool:
     return False
 
 
-def _find_existing_console_port(host: str, start_port: int, max_ports: int = WEB_PORT_SCAN_LIMIT) -> int | None:
+def _find_existing_console_port(host: str, start_port: int, max_ports: int = WEB_PORT_SCAN_LIMIT) -> Optional[int]:
     for current_port in range(start_port, start_port + max_ports):
         checked_pids = set()
         for current_host in _conflict_hosts(host):
@@ -161,7 +161,7 @@ def _find_existing_console_port(host: str, start_port: int, max_ports: int = WEB
     return None
 
 
-def _find_first_available_port(host: str, start_port: int, max_ports: int = WEB_PORT_SCAN_LIMIT) -> int | None:
+def _find_first_available_port(host: str, start_port: int, max_ports: int = WEB_PORT_SCAN_LIMIT) -> Optional[int]:
     for current_port in range(start_port, start_port + max_ports):
         if all(_get_listener_pid(current_host, current_port) is None for current_host in _conflict_hosts(host)):
             return current_port
