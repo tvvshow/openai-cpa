@@ -20,13 +20,18 @@ from typing import Optional
 
 # Stubs for functions added by auth_core_patch.py
 # These will be replaced when auth_core_patch is imported
-def sys_node_allocate(data, proxies):
-    """Stub: patched by auth_core_patch.py"""
-    return False, "", ""
+def sys_node_allocate(s_reg, did, saved_temp_at, proxies):
+    """Stub: patched by auth_core_patch.py (v17 signature)"""
+    return False, "", "", ""
 
-def sys_node_release(temp_user_at, handle_a, handle_b, proxies):
-    """Stub: patched by auth_core_patch.py"""
+def sys_node_release(saved_temp_at, handle_a="", handle_b="", handle_c="",
+                     proxies=None, original_email=None):
+    """Stub: patched by auth_core_patch.py (v17 signature)"""
     pass
+
+def sys_team_domain_verify(email, proxies):
+    """Stub: patched by auth_core_patch.py (v17 signature)"""
+    return False, "", "", ""
 
 def sys_node_bulk_silent(proxies=None, force_all=False):
     """Stub: patched by auth_core_patch.py"""
@@ -39,6 +44,7 @@ __all__ = [
     "image2api_data",
     "sys_node_allocate",
     "sys_node_release",
+    "sys_team_domain_verify",
     "sys_node_bulk_silent",
     # Models
     "Config",

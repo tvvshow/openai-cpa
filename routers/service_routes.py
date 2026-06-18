@@ -2,7 +2,10 @@ import os
 import asyncio
 import httpx
 import json
-from fastapi import APIRouter, Depends
+import urllib.parse
+import ipaddress
+import socket
+from fastapi import APIRouter, Depends, BackgroundTasks
 from pydantic import BaseModel
 from cloudflare import Cloudflare
 from curl_cffi import requests as cffi_requests
@@ -23,11 +26,20 @@ class LuckMailBulkBuyReq(BaseModel): quantity: int; auto_tag: bool; config: dict
 class GmailExchangeReq(BaseModel): code: str
 class ClashDeployReq(BaseModel): count: int
 class ClashUpdateReq(BaseModel): sub_url: str; target: str = "all"
+class ClashRuntimeReq(BaseModel): action: str
+class ClashSwitchReq(BaseModel): group_name: str; proxy_name: str; target: str = "all"
+class ClashDelayReq(BaseModel): group_name: str; target: str = "all"
+class ClashTestedNodesClearReq(BaseModel): group_name: str
+class ClashSubscriptionAddReq(BaseModel): name: str = ""; url: str; make_selected: bool = False
+class ClashSubscriptionSelectReq(BaseModel): subscription_id: str; target: str = "all"; resolved_url: str = ""
+class ClashSubscriptionDeleteReq(BaseModel): subscription_id: str
 class TestTgReq(BaseModel):token: str; chat_id: str
 class GmailCredentialsReq(BaseModel):content: str
+
 class CFDeployWorkerReq(BaseModel):api_email: str; api_key: str; worker_name: str; webhook_url: str; webhook_secret: str
 class CFZoneBaseReq(BaseModel):domains: str; api_email: str; api_key: str
 class CFSetupRoutingReq(CFZoneBaseReq):worker_name: str
+
 
 @router.post("/api/config/add_wildcard_dns")
 async def add_wildcard_dns(req: CFSyncExistingReq, token: str = Depends(verify_token)):
@@ -232,20 +244,65 @@ def get_sub2api_groups(token: str = Depends(verify_token)):
         return {"status": "error", "message": f"Failed to fetch Sub2API groups: {exc}"}
 
 @router.get("/api/clash/status")
-async def get_clash_status(token: str = Depends(verify_token)):
+def get_clash_status(token: str = Depends(verify_token)):
     res = clash_manager.get_pool_status()
     if "error" in res:
         return {"status": "error", "message": res["error"]}
     return {"status": "success", "data": res}
 
 @router.post("/api/clash/deploy")
-async def post_clash_deploy(req: ClashDeployReq, token: str = Depends(verify_token)):
-    success, msg = clash_manager.deploy_clash_pool(req.count)
-    return {"status": "success" if success else "error", "message": msg}
+async def post_clash_deploy(req: ClashDeployReq, background_tasks: BackgroundTasks, token: str = Depends(verify_token)):
+    background_tasks.add_task(clash_manager.deploy_clash_pool, req.count)
+    return {
+        "status": "success",
+        "message": f"正在后台调整实例规模至 {req.count}，请稍后刷新查看"
+    }
 
 @router.post("/api/clash/update")
-async def post_clash_update(req: ClashUpdateReq, token: str = Depends(verify_token)):
-    success, msg = clash_manager.patch_and_update(req.sub_url, req.target)
+async def post_clash_update(req: ClashUpdateReq, background_tasks: BackgroundTasks, token: str = Depends(verify_token)):
+    background_tasks.add_task(clash_manager.patch_and_update, req.sub_url, req.target)
+
+    return {
+        "status": "success",
+        "message": f"正在后台更新 {req.target} 的节点配置并重启容器，预计需要几十秒"
+    }
+
+@router.post("/api/clash/runtime")
+async def post_clash_runtime(req: ClashRuntimeReq, token: str = Depends(verify_token)):
+    success, msg = clash_manager.control_runtime(req.action)
+    return {"status": "success" if success else "error", "message": msg}
+
+@router.post("/api/clash/switch")
+async def post_clash_switch(req: ClashSwitchReq, token: str = Depends(verify_token)):
+    success, msg = clash_manager.switch_proxy_group(req.group_name, req.proxy_name, req.target)
+    return {"status": "success" if success else "error", "message": msg}
+
+@router.post("/api/clash/delay")
+async def post_clash_delay(req: ClashDelayReq, token: str = Depends(verify_token)):
+    success, result = clash_manager.test_group_latency(req.group_name, req.target)
+    if success:
+        healthy_count = len(result.get("healthy_nodes", [])) if isinstance(result, dict) else 0
+        return {"status": "success", "data": result, "message": f"已完成策略组 [{req.group_name}] 节点延迟测试，并自动保存 {healthy_count} 个有效节点"}
+    return {"status": "error", "message": str(result)}
+
+@router.post("/api/clash/tested_nodes/clear")
+async def post_clash_tested_nodes_clear(req: ClashTestedNodesClearReq, token: str = Depends(verify_token)):
+    success, msg = clash_manager.clear_tested_nodes(req.group_name)
+    return {"status": "success" if success else "error", "message": msg}
+
+@router.post("/api/clash/subscriptions/add")
+async def post_clash_subscription_add(req: ClashSubscriptionAddReq, token: str = Depends(verify_token)):
+    success, msg = clash_manager.add_subscription(req.name, req.url, req.make_selected)
+    return {"status": "success" if success else "error", "message": msg}
+
+@router.post("/api/clash/subscriptions/select")
+async def post_clash_subscription_select(req: ClashSubscriptionSelectReq, token: str = Depends(verify_token)):
+    success, msg = clash_manager.select_subscription(req.subscription_id, req.target, req.resolved_url)
+    return {"status": "success" if success else "error", "message": msg}
+
+@router.post("/api/clash/subscriptions/delete")
+async def post_clash_subscription_delete(req: ClashSubscriptionDeleteReq, token: str = Depends(verify_token)):
+    success, msg = clash_manager.delete_subscription(req.subscription_id)
     return {"status": "success" if success else "error", "message": msg}
 
 
@@ -345,6 +402,74 @@ async def cloudflare_add_zones(req: CFZoneBaseReq, token: str = Depends(verify_t
         return {"status": "error", "message": str(e)}
 
 
+@router.post("/api/cloudflare/delete_zones")
+async def cloudflare_delete_zones(req: CFZoneBaseReq, token: str = Depends(verify_token)):
+    try:
+        domain_list = [d.strip() for d in req.domains.split(",") if d.strip()]
+        if not domain_list:
+            return {"status": "error", "message": "没有找到有效的域名"}
+
+        headers = {
+            "X-Auth-Email": req.api_email,
+            "X-Auth-Key": req.api_key,
+            "Content-Type": "application/json"
+        }
+        proxy_url = getattr(core_engine.cfg, 'DEFAULT_PROXY', None)
+        client_kwargs = {"timeout": 30.0, "proxy": proxy_url} if proxy_url else {"timeout": 30.0}
+
+        results = []
+        async with httpx.AsyncClient(**client_kwargs) as client:
+            for domain in domain_list:
+                print(f"[{core_engine.ts()}] [CF 托管删除] 正在检查域名状态: {domain}")
+                zone_resp = await client.get(
+                    f"https://api.cloudflare.com/client/v4/zones?name={domain}",
+                    headers=headers
+                )
+                zone_data = zone_resp.json()
+
+                if not zone_data.get("success") or not zone_data.get("result"):
+                    results.append({
+                        "domain": domain,
+                        "status": "error",
+                        "name_servers": [],
+                        "msg": "未在 CF 账号中找到该域名"
+                    })
+                    print(f"[{core_engine.ts()}] [CF 托管删除] ❌ [{domain}] 未在账号中找到。")
+                    continue
+
+                zone_info = zone_data["result"][0]
+                zone_id = zone_info["id"]
+                delete_resp = await client.delete(
+                    f"https://api.cloudflare.com/client/v4/zones/{zone_id}",
+                    headers=headers
+                )
+                delete_data = delete_resp.json()
+
+                if delete_resp.status_code == 200 and delete_data.get("success"):
+                    results.append({
+                        "domain": domain,
+                        "status": "deleted",
+                        "name_servers": zone_info.get("name_servers", []),
+                        "msg": "✅ 已从 CF 删除托管域名"
+                    })
+                    print(f"[{core_engine.ts()}] [CF 托管删除] 🎉 [{domain}] 删除成功。")
+                else:
+                    err_msg = str(delete_data.get("errors", []))
+                    results.append({
+                        "domain": domain,
+                        "status": "error",
+                        "name_servers": zone_info.get("name_servers", []),
+                        "msg": f"❌ 删除失败: {err_msg}"
+                    })
+                    print(f"[{core_engine.ts()}] [CF 托管删除] ❌ [{domain}] 删除失败: {err_msg}")
+
+                await asyncio.sleep(0.5)
+
+        return {"status": "success", "data": results}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 @router.post("/api/cloudflare/enable_email")
 async def cloudflare_enable_email(req: CFZoneBaseReq, token: str = Depends(verify_token)):
     try:
@@ -394,9 +519,12 @@ async def cloudflare_enable_email(req: CFZoneBaseReq, token: str = Depends(verif
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
-
 @router.post("/api/cloudflare/deploy_worker")
 async def cloudflare_deploy_worker(req: CFDeployWorkerReq, token: str = Depends(verify_token)):
+    is_valid, err_msg = await validate_webhook_domain(req.webhook_url)
+    if not is_valid:
+        print(f"[{core_engine.ts()}] [CF Worker] ❌ URL校验失败: {err_msg}")
+        return {"status": "error", "message": err_msg}
     WORKER_RAW_URL = "https://raw.githubusercontent.com/wenfxl/openai-cpa-email/refs/heads/master/worker.js"
     try:
         proxy_url = getattr(core_engine.cfg, 'DEFAULT_PROXY', None)
@@ -532,3 +660,33 @@ async def cloudflare_setup_catch_all(req: CFSetupRoutingReq, token: str = Depend
     except Exception as e:
         print(f"[{core_engine.ts()}] [CF 路由] ❌ 发生异常: {str(e)}")
         return {"status": "error", "message": str(e)}
+async def validate_webhook_domain(url: str) -> tuple[bool, str]:
+    parsed = urllib.parse.urlparse(url)
+    hostname = parsed.hostname
+
+    if not hostname:
+        return False, "无效的 URL 格式，请包含 http:// 或 https://"
+    try:
+        ipaddress.ip_address(hostname)
+        return False, "面板访问地址必须是域名，且解析的IP为公网IPV4"
+    except ValueError:
+        pass
+    loop = asyncio.get_running_loop()
+    try:
+        infos = await loop.getaddrinfo(hostname, None, family=socket.AF_INET)
+    except socket.gaierror:
+        return False, f"域名 {hostname} 无法解析，请检查域名是否正确"
+
+    has_public_ipv4 = False
+    for info in infos:
+        ip_str = info[4][0]
+        ip_obj = ipaddress.IPv4Address(ip_str)
+
+        if not ip_obj.is_private and not ip_obj.is_loopback and not ip_obj.is_link_local:
+            has_public_ipv4 = True
+            break
+
+    if not has_public_ipv4:
+        return False, f"域名 {hostname} 没有解析到有效的公网 IPv4 地址"
+
+    return True, ""

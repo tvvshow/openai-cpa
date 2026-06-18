@@ -21,11 +21,18 @@ config.yaml
 utils/sentinel.py
 
 data
-utils/auth_core/
-!utils/auth_core.pyd
 test.py
 test_register.py
 test_register2.py
 test_register3.py
+test_register4.py
+test_register5.py
 aitest.py
-register.py.bakdocs/
+register.py.bak
+docs/
+.codex/
+AGENTS.md
+stop_openai_cpa.ps1
+code.py
+register - 副本.py
+ChatGPT_team.py

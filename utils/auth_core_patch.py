@@ -605,66 +605,50 @@ def _api_delete_invite(admin_at: str, account_id: str,
         return False
 
 
-def _sys_node_allocate(data: str, proxies) -> tuple:
-    """Allocate a team seat for the newly registered user.
+_TEAM_STUB_WARNED = False
 
-    Flow (binary + reference):
-    1. get_random_team_account() from DB (with token refresh)
-    2. _get_account_id() to find admin's team account_id
-    3. Extract email from new user's JWT
-    4. _api_send_invite(admin_at, account_id, email)
-    5. _api_get_invite_id(admin_at, account_id, email)
-    6. _api_accept_invite(user_at=data, account_id, invite_id)
-    7. Return (success, invite_id, chatgpt_account_id)
+
+def _warn_team_stub(fn_name: str) -> None:
+    """Emit a one-time notice that Team-mode sentinel functions are stubbed.
+
+    After the v17 merge, upstream switched Team allocation to a session/cookies
+    flow whose sentinel calls (sys_node_allocate / sys_node_release /
+    sys_team_domain_verify) we have not yet reverse-engineered in pure Python.
+    These are intentionally no-op stubs so that normal / CPA / Sub2API modes
+    import and run cleanly; only Team mode is deferred. The legacy token-based
+    invite implementation below is kept dormant for future reference.
     """
-    try:
-        jwt_data = _email_jwt(data)
-        email_address = jwt_data.get("email", "")
-        if not email_address:
-            return False, "", ""
-
-        admin_at, account_id, _ = _get_team_admin_info(proxies)
-        if not admin_at or not account_id:
-            return False, "", ""
-
-        if not _api_send_invite(admin_at, account_id, email_address, proxies):
-            return False, "", ""
-
-        time.sleep(2)
-
-        invite_id = _api_get_invite_id(admin_at, account_id, email_address, proxies)
-        if not invite_id:
-            return False, "", ""
-
-        if not _api_accept_invite(data, account_id, invite_id, proxies):
-            return False, invite_id, account_id
-
-        return True, invite_id, account_id
-    except Exception:
-        return False, "", ""
+    global _TEAM_STUB_WARNED
+    if not _TEAM_STUB_WARNED:
+        _TEAM_STUB_WARNED = True
+        print(f"[Team] sentinel 函数 {fn_name} 为待逆向桩，Team 模式暂不可用（不影响常规/CPA/Sub2API）")
 
 
-def _sys_node_release(temp_user_at: str, handle_a: str, handle_b: str, proxies) -> None:
-    """Release a team seat by removing the user from the team.
+def _sys_node_allocate(s_reg, did, saved_temp_at, proxies) -> tuple:
+    """v17 signature stub — Team seat allocation is deferred.
 
-    handle_a = invite_id (unused for removal)
-    handle_b = chatgpt_account_id of the team
+    Upstream v17 calls this as (session, device_id, temp_access_token, proxies)
+    and expects a 4-tuple (is_allocated, handle_a, handle_b, handle_c). We return
+    "not allocated" so the registration pipeline skips Team handling gracefully.
     """
-    try:
-        if not handle_b:
-            return
-        account_id = handle_b
-        jwt_data = _email_jwt(temp_user_at)
-        email = jwt_data.get("email", "")
-        if not email:
-            return
-        # Use _get_team_admin_info which handles token refresh
-        admin_at, _, _ = _get_team_admin_info(proxies)
-        if not admin_at:
-            return
-        _api_remove_member(admin_at, account_id, email, proxies)
-    except Exception:
-        pass
+    _warn_team_stub("sys_node_allocate")
+    return False, "", "", ""
+
+
+def _sys_node_release(saved_temp_at, handle_a="", handle_b="", handle_c="",
+                      proxies=None, original_email=None) -> None:
+    """v17 signature stub — seat release is a no-op while Team mode is deferred."""
+    _warn_team_stub("sys_node_release")
+    return None
+
+
+def _sys_team_domain_verify(email, proxies) -> tuple:
+    """v17 signature stub — Team domain verification is deferred.
+
+    Expected 4-tuple (is_verified, handle_a, handle_b, handle_c).
+    """
+    _warn_team_stub("sys_team_domain_verify")
+    return False, "", "", ""
 
 
 def _api_clear_all_seats_silent(admin_at: str, account_id: str, proxies: dict) -> int:
@@ -805,4 +789,5 @@ def _sys_node_bulk_silent(proxies: dict = None, force_all: bool = False) -> None
 _ac.email_jwt = _email_jwt
 _ac.sys_node_allocate = _sys_node_allocate
 _ac.sys_node_release = _sys_node_release
+_ac.sys_team_domain_verify = _sys_team_domain_verify
 _ac.sys_node_bulk_silent = _sys_node_bulk_silent

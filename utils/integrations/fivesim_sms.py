@@ -148,6 +148,8 @@ def _fivesim_reuse_clear():
 
 def _fivesim_request(method: str, endpoint: str, proxies: Any, params: dict = None, json_data: dict = None) -> tuple[
     bool, str, Any]:
+    if not getattr(cfg, "FIVESIM_USE_PROXY", False):
+        proxies = None
     key = _fivesim_api_key()
     if not key: return False, "NO_KEY", None
 
@@ -159,10 +161,10 @@ def _fivesim_request(method: str, endpoint: str, proxies: Any, params: dict = No
     try:
         if method.upper() == "GET":
             resp = requests.get(url, headers=headers, params=params, proxies=proxies, verify=_ssl_verify(), timeout=20,
-                                impersonate="chrome110")
+                                impersonate="chrome")
         else:
             resp = requests.post(url, headers=headers, json=json_data, proxies=proxies, verify=_ssl_verify(),
-                                 timeout=20, impersonate="chrome110")
+                                 timeout=20, impersonate="chrome")
     except Exception as e:
         return False, f"REQUEST_ERROR: {e}", None
 
@@ -193,33 +195,55 @@ def fivesim_get_balance(proxies: Any = None) -> tuple[float, str]:
 def _fivesim_prices_by_service(service_code: str, proxies: Any, force_refresh: bool = False) -> list[dict]:
     svc = str(service_code or "openai").strip().lower()
     now = time.time()
-
     with _FIVESIM_PRICE_CACHE_LOCK:
         if not force_refresh and _FIVESIM_PRICE_CACHE.get("service") == svc and (
                 now - _FIVESIM_PRICE_CACHE.get("updated_at", 0)) <= 90:
             return list(_FIVESIM_PRICE_CACHE.get("items", []))
 
     ok, text, data = _fivesim_request("GET", f"guest/prices?product={svc}", proxies)
-    rows = []
+    country_groups = {}
+
     if ok and isinstance(data, dict) and svc in data:
-        countries_data = data[svc]
-        for country_name, operators in countries_data.items():
-            total_count = sum(op.get("count", 0) for op in operators.values())
-            valid_costs = [float(op.get("cost", 999)) for op in operators.values() if op.get("count", 0) > 0]
-            if total_count > 0 and valid_costs:
-                min_cost = min(valid_costs)
-                zh_name = _FIVESIM_COUNTRY_ZH.get(country_name.lower(), str(country_name).capitalize())
-                rows.append({
+        for country_name, operators in data[svc].items():
+            zh_name = _FIVESIM_COUNTRY_ZH.get(country_name.lower(), str(country_name).capitalize())
+
+            routes = []
+            total_count = 0
+            for operator_name, op_data in operators.items():
+                count = int(op_data.get("count", 0))
+                cost = float(op_data.get("cost", 999))
+                delivery = float(op_data.get("rate", -1.0))
+
+                if count > 0 and operator_name.lower() != "any":
+                    routes.append({
+                        "provider": operator_name,
+                        "cost": cost,
+                        "count": count,
+                        "delivery": delivery
+                    })
+                    total_count += count
+
+            if routes:
+                routes.sort(key=lambda x: (-x["delivery"], x["cost"], -x["count"]))
+                best_route = routes[0]
+
+                country_groups[country_name] = {
                     "country": country_name,
                     "name": zh_name,
-                    "cost": min_cost,
-                    "count": total_count
-                })
+                    "total_count": total_count,
+                    "min_cost": best_route["cost"],
+                    "delivery": best_route["delivery"],
+                    "provider": best_route["provider"],
+                    "routes": routes
+                }
 
+    rows = list(country_groups.values())
     if rows:
-        rows.sort(key=lambda x: (x["cost"], -x["count"]))
+        rows.sort(key=lambda x: (-x.get("delivery", -1.0), x.get("min_cost", 999), -x["total_count"]))
+
         with _FIVESIM_PRICE_CACHE_LOCK:
             _FIVESIM_PRICE_CACHE.update({"service": svc, "updated_at": now, "items": rows})
+
     return rows
 
 
@@ -232,12 +256,15 @@ def _fivesim_pick_country(proxies: Any, service_code: str, pref_country: str, ex
     valid_options = []
     for r in rows:
         cname = r["country"]
-        if cname in excluded or r["count"] <= 0: continue
-        cost = r["cost"]
+        count = r.get("total_count", 0)
+        if cname in excluded or count <= 0: continue
+        cost = r.get("min_cost", 999.0)
+        delivery = r.get("delivery", -1.0)
+
         if limit_max > 0 and cost > limit_max: continue
         if limit_min > 0 and cost < limit_min: continue
 
-        score = -cost * 100 + min(r["count"], 10000) / 100.0
+        score = (delivery * 10 if delivery > 0 else -500) - (cost * 100) + (min(count, 10000) / 100.0)
         if cname == pref_country: score += 50
         valid_options.append((score, cname))
 
@@ -250,22 +277,31 @@ def _fivesim_get_number(proxies: Any, service: str, country: str, enable_reuse: 
     str, str, str, str]:
     limit_max = _fivesim_max_price()
     limit_min = _fivesim_min_price()
-
+    operator = str(getattr(cfg, 'FIVESIM_OPERATOR', '')).strip()
     if limit_max > 0 or limit_min > 0:
         rows = _fivesim_prices_by_service(service, proxies)
         actual_cost = -1.0
         for r in rows:
             if r.get("country") == country:
-                actual_cost = float(r.get("cost", -1.0))
+                routes = r.get("routes", [])
+                for route in routes:
+                    if not operator or route.get("provider") == operator:
+                        actual_cost = float(route.get("cost", -1.0))
+                        if not operator:
+                            operator = route.get("provider")
+                        break
                 break
+
         if actual_cost > 0:
             if limit_max > 0 and actual_cost > limit_max:
-                return "", "", f"价格拦截: 当前国家价格 ({actual_cost}$) 高于最高限价 ({limit_max}$)", ""
+                return "", "", f"价格拦截: 当前线路价格 ({actual_cost}$) 高于最高限价 ({limit_max}$)", ""
             if limit_min > 0 and actual_cost < limit_min:
-                return "", "", f"价格拦截: 当前国家价格 ({actual_cost}$) 低于最低限价 ({limit_min}$)", ""
+                return "", "", f"价格拦截: 当前线路价格 ({actual_cost}$) 低于最低限价 ({limit_min}$)", ""
 
     c = country or "any"
-    endpoint = f"user/buy/activation/{c}/any/{service}"
+    op = operator if operator else "any"
+    endpoint = f"user/buy/activation/{c}/{op}/{service}"
+
     params = {}
     if limit_max > 0: params["maxPrice"] = limit_max
     if enable_reuse: params["reuse"] = "1"
@@ -280,10 +316,10 @@ def _fivesim_set_status(action: str, order_id: str, proxies: Any):
     if not order_id: return
     _fivesim_request("GET", f"user/{action}/{order_id}", proxies)
 
-def _fivesim_poll_code(order_id: str, proxies: Any, expected_sms_index: int = 0) -> str:
-    timeout_sec = _fivesim_poll_timeout()
+def _fivesim_poll_code(order_id: str, proxies: Any, expected_sms_index: int = 0, timeout_override: int = 0) -> str:
+    timeout_sec = timeout_override if timeout_override > 0 else _fivesim_poll_timeout()
     started = time.time()
-    _info(f"⏳ 正在等待 5SIM 验证码 (第 {expected_sms_index + 1} 条, 最大等待 {timeout_sec} 秒)...")
+    _info(f"⏳ 正在等待 5SIM 验证码 (第 {expected_sms_index + 1} 条, 本次最大等待 {timeout_sec} 秒)...")
     last_print = time.time()
 
     while time.time() - started < timeout_sec:
@@ -317,15 +353,6 @@ def try_verify_phone_via_fivesim(session: requests.Session, *, proxies: Any, hin
     bool, str]:
     if not _fivesim_enabled(): return False, "5SIM 未配置或未开启"
     max_tries = _fivesim_max_tries()
-    started = time.time()
-    lock_acquired = False
-
-    while True:
-        _raise_if_stopped()
-        if _FIVESIM_VERIFY_LOCK.acquire(timeout=0.5):
-            lock_acquired = True
-            break
-        if time.time() - started >= 180: return False, "5SIM 排队超时"
 
     def _verify_once(aid: str, phone_number: str, source: str, current_use_index: int) -> tuple[bool, str, str]:
         try:
@@ -335,7 +362,7 @@ def try_verify_phone_via_fivesim(session: requests.Session, *, proxies: Any, hin
 
             send_sentinel = generate_payload(
                 did=device_id, flow="authorize_continue", proxy=proxy,
-                user_agent=user_agent, impersonate="chrome110", ctx=run_ctx
+                user_agent=user_agent, impersonate="chrome", ctx=run_ctx
             )
             if send_sentinel: hdrs["openai-sentinel-token"] = send_sentinel
 
@@ -350,17 +377,40 @@ def try_verify_phone_via_fivesim(session: requests.Session, *, proxies: Any, hin
                 _warn(f"[{source}] ❌ {fail_reason}")
                 return False, "", fail_reason
 
-            _info(f"[{source}] ✅ OpenAI 接受了号码，开始轮询验证码...")
-            sms_code = _fivesim_poll_code(aid, proxies, expected_sms_index=current_use_index)
+            _info(f"[{source}] ✅ OpenAI 接受了号码，开始轮询验证码 (本次等待 50 秒)...")
+            sms_code = _fivesim_poll_code(aid, proxies, expected_sms_index=current_use_index, timeout_override=50)
+
             if not sms_code:
-                return False, "", "接码超时"
+                _warn(f"[{source}] ⚠ 15秒内未收到验证码，直接触发重发机制...")
+                _sleep_interruptible(1.0)
+
+                send_sentinel_2 = generate_payload(
+                    did=device_id, flow="authorize_continue", proxy=proxy,
+                    user_agent=user_agent, impersonate="chrome", ctx=run_ctx
+                )
+                if send_sentinel_2: hdrs["openai-sentinel-token"] = send_sentinel_2
+
+                _info(f"[{source}] (重发) 正在向 OpenAI 再次提交号码 {phone_number}...")
+                send_resp_2 = _post_with_retry(session, "https://auth.openai.com/api/accounts/add-phone/send",
+                                               headers=hdrs, json_body={"phone_number": phone_number}, proxies=proxies)
+
+                if send_resp_2.status_code != 200:
+                    fail_reason = f"重发失败 HTTP {send_resp_2.status_code}"
+                    _warn(f"[{source}] ❌ 重发提交被 OpenAI 拦截: {fail_reason}")
+                    return False, "", fail_reason
+
+                _info(f"[{source}] ✅ 已重新请求发送，开始轮询验证码 (等待最大超时)...")
+                sms_code = _fivesim_poll_code(aid, proxies, expected_sms_index=current_use_index, timeout_override=0)
+
+            if not sms_code:
+                return False, "", "接码彻底超时"
 
             v_hdrs = {"referer": "https://auth.openai.com/phone-verification", "accept": "application/json",
                       "content-type": "application/json"}
 
             sentinel = generate_payload(
                 did=device_id, flow="authorize_continue", proxy=proxy,
-                user_agent=user_agent, impersonate="chrome110", ctx=run_ctx
+                user_agent=user_agent, impersonate="chrome", ctx=run_ctx
             )
             if sentinel: v_hdrs["openai-sentinel-token"] = sentinel
             v_resp = _post_with_retry(session, "https://auth.openai.com/api/accounts/phone-otp/validate",
@@ -381,6 +431,7 @@ def try_verify_phone_via_fivesim(session: requests.Session, *, proxies: Any, hin
 
     try:
         service_code = str(getattr(cfg, 'FIVESIM_SERVICE', 'openai')).strip()
+        if not service_code: service_code = "openai"
         pref_country = str(getattr(cfg, 'FIVESIM_COUNTRY', 'any')).strip()
         excluded = set()
         last_reason = "验证失败"
@@ -391,7 +442,6 @@ def try_verify_phone_via_fivesim(session: requests.Session, *, proxies: Any, hin
             raid, rphone, rused = _fivesim_reuse_get(service_code, pref_country if not _fivesim_auto_pick() else "")
             if raid and rphone:
                 _info(f"♻️ 触发【同单多码】复用: {rphone} (订单: {raid}, 已用 {rused} 次)")
-
                 ok_r, next_r, reason_r = _verify_once(raid, rphone, source="同单复用", current_use_index=rused)
 
                 if ok_r:
@@ -439,4 +489,87 @@ def try_verify_phone_via_fivesim(session: requests.Session, *, proxies: Any, hin
 
         return False, last_reason
     finally:
-        if lock_acquired: _FIVESIM_VERIFY_LOCK.release()
+        pass
+
+
+def get_phone_for_signup(proxies: Any) -> tuple[str, str, str, str]:
+    if not _fivesim_enabled():
+        return "", "", "", "5SIM 未配置或未开启"
+
+    max_tries = _fivesim_max_tries()
+    service_code = str(getattr(cfg, 'FIVESIM_SERVICE', 'openai')).strip() or "openai"
+    pref_country = str(getattr(cfg, 'FIVESIM_COUNTRY', 'any')).strip()
+    excluded = set()
+    reuse_on = _fivesim_reuse_enabled()
+
+    country = _fivesim_pick_country(proxies, service_code, pref_country, excluded)
+    _info(f"5SIM 手机首发分配: 目标国家为 {country} (服务: {service_code})")
+
+    last_gerr = ""
+    for attempt in range(1, max_tries + 1):
+        if getattr(cfg, 'GLOBAL_STOP', False):
+            break
+
+        _info(f"[{attempt}/{max_tries}] 正在向 5SIM 请求首发全新号码 (国家: {country})...")
+        aid, phone, gerr, cost = _fivesim_get_number(proxies, service=service_code, country=country,
+                                                     enable_reuse=reuse_on)
+
+        if aid:
+            _info(f"📱 成功取到全新号码 (用于首发注册): {phone} (订单: {aid} | 扣费: {cost} $)")
+            if reuse_on:
+                _fivesim_reuse_set(aid, phone, service_code, country)
+            return aid, phone, country, ""
+
+        last_gerr = gerr
+        _warn(f"⚠️ 第 {attempt}/{max_tries} 次首发取号失败: {gerr}")
+
+        if "balance" in str(gerr).lower():
+            _warn("❌ 5SIM 余额不足，直接退出！")
+            break
+
+        if attempt < max_tries and _fivesim_auto_pick() and "no free phones" in str(gerr).lower():
+            excluded.add(country)
+            country = _fivesim_pick_country(proxies, service_code, pref_country, excluded)
+            _info(f"🔄 自动切换至备选国家: {country}")
+
+        _sleep_interruptible(2.0)
+
+    return "", "", "", last_gerr
+
+
+def wait_code_for_signup(order_id: str, proxies: Any) -> str:
+    timeout_sec = _fivesim_poll_timeout()
+    started = time.time()
+    _info(f"⏳ 正在等待 5SIM 首发注册短信验证码...")
+    last_print = time.time()
+
+    while time.time() - started < timeout_sec:
+        _raise_if_stopped()
+        ok, text, data = _fivesim_request("GET", f"user/check/{order_id}", proxies)
+
+        if time.time() - last_print > 8:
+            status = data.get('status', 'WAITING') if data else 'UNKNOWN'
+            _info(f"🔄 仍在等待短信中... (当前状态: {status})")
+            last_print = time.time()
+
+        if ok and data and data.get("status") in ["RECEIVED", "PENDING"]:
+            sms_list = data.get("sms", [])
+            if sms_list:
+                code = str(sms_list[-1].get("code", ""))
+                if code:
+                    _info(f"🎉 成功接收到首发短信验证码: {code}")
+                    return code
+        elif ok and data and data.get("status") in ["CANCELED", "BANNED", "TIMEOUT"]:
+            _warn(f"❌ 5SIM 订单已取消或超时: {data.get('status')}")
+            return ""
+
+        _sleep_interruptible(3.0)
+
+    _warn("⚠5SIM 接码彻底超时！")
+    return ""
+
+def report_signup_result(order_id: str, country: str, success: bool, reason: str, proxies: Any) -> None:
+    if success:
+        _fivesim_set_status("finish", order_id, proxies)
+    else:
+        _fivesim_set_status("ban", order_id, proxies)
