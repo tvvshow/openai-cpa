@@ -7,7 +7,7 @@
 | 分支 | 版本 | 状态 | 说明 |
 |------|------|------|------|
 | `main` | v14.5.3 | **稳定版** | 生产环境请使用此分支。依赖 Nuitka 编译的 `auth_core` 二进制模块。 |
-| `feat/pure-python-auth-core` | v17.0.2-pure.1 | **测试版** | 已同步上游 v17.0.2 全部业务更新，并将 `auth_core` 完全替换为纯 Python 实现，无二进制依赖。Team 模式采用上游 session/cookies 流程（Team 专用 sentinel 函数为待逆向桩，暂不可用）；常规/CPA/Sub2API 模式功能完整。 |
+| `feat/pure-python-auth-core` | v17.0.2-pure.1 | **测试版** | 已同步上游 v17.0.2 全部业务更新，并将 `auth_core` 完全替换为纯 Python 实现，无二进制依赖。常规/CPA/Sub2API 模式功能完整；Team「超速妙」域名验证模式（`team_mode.overspeed`）已纯 Python 实现（Cloudflare DNS TXT + DoH 校验 + OpenAI 域名验证/自动加入）；邀请制 Team 分配（`team_mode.enable`）为待接线安全桩。 |
 
 一个面向多节点场景的可视化调度平台，用于统一管理注册任务、邮箱验证码通道、代理切换、云端仓库补货与本地库存。
 

@@ -609,19 +609,19 @@ _TEAM_STUB_WARNED = False
 
 
 def _warn_team_stub(fn_name: str) -> None:
-    """Emit a one-time notice that Team-mode sentinel functions are stubbed.
+    """Emit a one-time notice that the invite-based Team functions are stubbed.
 
-    After the v17 merge, upstream switched Team allocation to a session/cookies
-    flow whose sentinel calls (sys_node_allocate / sys_node_release /
-    sys_team_domain_verify) we have not yet reverse-engineered in pure Python.
-    These are intentionally no-op stubs so that normal / CPA / Sub2API modes
-    import and run cleanly; only Team mode is deferred. The legacy token-based
-    invite implementation below is kept dormant for future reference.
+    v17's overspeed domain-verification path (sys_team_domain_verify) is fully
+    implemented below. The invite-based allocation path (sys_node_allocate /
+    sys_node_release) is intentionally left as a safe no-op stub — it is only
+    used when team_mode.enable is on, and returns "not allocated" so normal /
+    CPA / Sub2API / overspeed flows import and run cleanly. The legacy v14
+    token-based invite helpers are kept dormant above for future wiring.
     """
     global _TEAM_STUB_WARNED
     if not _TEAM_STUB_WARNED:
         _TEAM_STUB_WARNED = True
-        print(f"[Team] sentinel 函数 {fn_name} 为待逆向桩，Team 模式暂不可用（不影响常规/CPA/Sub2API）")
+        print(f"[Team] {fn_name} 为待接线桩（邀请制 Team）；超速妙域名验证模式可正常使用")
 
 
 def _sys_node_allocate(s_reg, did, saved_temp_at, proxies) -> tuple:
@@ -642,13 +642,374 @@ def _sys_node_release(saved_temp_at, handle_a="", handle_b="", handle_c="",
     return None
 
 
-def _sys_team_domain_verify(email, proxies) -> tuple:
-    """v17 signature stub — Team domain verification is deferred.
+# =====================================================================
+# Overspeed Team domain verification (v17 「超速妙」)
+# ---------------------------------------------------------------------
+# Pure-Python reconstruction of the gated binary's sys_team_domain_verify
+# flow. The binary stores its endpoints encrypted (see _decrypt_url /
+# _get_url_key, entangled with the license machinery), so the exact OpenAI
+# domains API paths/payloads below are a best-effort reconstruction from the
+# binary string table (function decomposition, header names, payload keys,
+# the /settings/auto_provision and /verify path fragments) plus the public
+# Cloudflare DNS + DNS-over-HTTPS contracts. The Cloudflare / DoH halves are
+# exact; the OpenAI-domains half is defensive (tries multiple field names)
+# and verbosely logged so live responses can be validated and tuned.
+#
+# Flow: pick a Team admin (cookies model) -> add the email's domain to the
+# Team -> write the verification TXT record on Cloudflare -> wait for DNS
+# propagation via DoH -> verify the domain on OpenAI -> enable auto-provision
+# so any @domain signup auto-joins the Team. Result is cached per domain.
+# =====================================================================
 
-    Expected 4-tuple (is_verified, handle_a, handle_b, handle_c).
+_CF_API_BASE = "https://api.cloudflare.com/client/v4"
+_DOH_ENDPOINTS = (
+    "https://cloudflare-dns.com/dns-query",
+    "https://dns.google/resolve",
+    "https://dns.alidns.com/resolve",
+)
+_DOMAIN_VERIFY_TIMEOUT = 180        # seconds to wait for DNS propagation
+_DOMAIN_VERIFY_POLL_INTERVAL = 6    # seconds between DoH polls
+
+# domain -> (account_id, domain_id); guards against re-verifying the same domain
+_verified_domains_cache: dict = {}
+_domain_locks_guard = threading.Lock()
+_domain_locks: dict = {}
+
+
+def _domain_of(email: str) -> str:
+    return email.rsplit("@", 1)[-1].strip().lower() if "@" in (email or "") else ""
+
+
+def _get_domain_lock(domain: str) -> threading.Lock:
+    """One lock per domain so concurrent workers don't double-verify it."""
+    with _domain_locks_guard:
+        lock = _domain_locks.get(domain)
+        if lock is None:
+            lock = threading.Lock()
+            _domain_locks[domain] = lock
+        return lock
+
+
+def _parse_cookie(cookie_str: str, name: str) -> str:
+    """Extract a single cookie value from a raw Cookie header string."""
+    if not cookie_str:
+        return ""
+    for part in cookie_str.replace("\n", ";").split(";"):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        k, _, v = part.partition("=")
+        if k.strip() == name:
+            return v.strip()
+    return ""
+
+
+def _ensure_team_at_v17(team_row: dict, proxies: dict) -> str:
+    """v17 cookies model: return a valid admin AT, refreshing from the stored
+    session-token cookie if the AT is missing/expired."""
+    at = team_row.get("access_token", "") or ""
+    if at and not _jwt_is_expired(at):
+        return at
+    cookies = team_row.get("cookies", "") or ""
+    session_token = (
+        _parse_cookie(cookies, "__Secure-next-auth.session-token")
+        or _parse_cookie(cookies, "next-auth.session-token")
+    )
+    if session_token:
+        result = _refresh_with_session_token(
+            session_token, proxies, team_row.get("account_id", "") or "")
+        new_at = result.get("access_token", "") if result else ""
+        if new_at:
+            team_row["access_token"] = new_at
+            return new_at
+    return at  # last resort: hand back whatever we had
+
+
+def _oai_admin_headers(admin_at: str, account_id: str, cookies: str) -> dict:
+    """Headers for OpenAI Team admin (domains) operations — Bearer AT plus the
+    admin's browser cookies, mirroring the binary's ADMIN_ORIGIN/IDENTITY use."""
+    h = {
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Authorization": f"Bearer {admin_at}",
+        "Content-Type": "application/json",
+        "Origin": _CHATGPT_BASE,
+        "Referer": f"{_CHATGPT_BASE}/admin",
+        "User-Agent": _UA,
+        "Connection": "keep-alive",
+    }
+    if account_id:
+        h["chatgpt-account-id"] = account_id
+    if cookies:
+        h["Cookie"] = cookies
+    return h
+
+
+# ---- Cloudflare DNS ----
+
+def _cf_headers() -> dict:
+    from utils import config as cfg
+    return {
+        "X-Auth-Email": getattr(cfg, "CF_API_EMAIL", "") or "",
+        "X-Auth-Key": getattr(cfg, "CF_API_KEY", "") or "",
+        "Content-Type": "application/json",
+    }
+
+
+def _cf_get_zone_id(domain: str, proxies: dict) -> str:
+    """Resolve the Cloudflare zone id for a domain, walking up to the
+    registrable parent (e.g. a.b.example.com -> example.com)."""
+    if cffi_requests is None:
+        return ""
+    headers = _cf_headers()
+    if not headers.get("X-Auth-Email") or not headers.get("X-Auth-Key"):
+        print(f"[Team][超速妙] 未配置 Cloudflare API 凭证 (cf_api_email / cf_api_key)")
+        return ""
+    labels = domain.split(".")
+    candidates = [".".join(labels[i:]) for i in range(len(labels) - 1)]
+    for cand in candidates:
+        try:
+            resp = cffi_requests.get(
+                f"{_CF_API_BASE}/zones", params={"name": cand},
+                headers=headers, proxies=proxies, **_REQ_KW)
+            if resp.status_code == 200:
+                result = resp.json().get("result", [])
+                if result:
+                    return result[0].get("id", "")
+        except Exception:
+            continue
+    return ""
+
+
+def _cf_set_txt(domain: str, record_name: str, content: str, proxies: dict) -> bool:
+    """Create (or confirm) a TXT record on Cloudflare for domain verification."""
+    if cffi_requests is None:
+        return False
+    zone_id = _cf_get_zone_id(domain, proxies)
+    if not zone_id:
+        print(f"[Team][超速妙] 未找到 {domain} 对应的 Cloudflare zone")
+        return False
+    headers = _cf_headers()
+    payload = {"type": "TXT", "name": record_name, "content": content, "ttl": 120}
+    try:
+        resp = cffi_requests.post(
+            f"{_CF_API_BASE}/zones/{zone_id}/dns_records",
+            json=payload, headers=headers, proxies=proxies, **_REQ_KW)
+        if resp.status_code in (200, 201):
+            return True
+        # Already-exists (CF error 81057/81058) is success for our purposes
+        try:
+            errors = resp.json().get("errors", [])
+            codes = {str(e.get("code")) for e in errors if isinstance(e, dict)}
+            blob = json.dumps(errors).lower()
+        except Exception:
+            codes, blob = set(), resp.text.lower() if hasattr(resp, "text") else ""
+        if codes & {"81057", "81058", "81053"} or "already exists" in blob:
+            return True
+        print(f"[Team][超速妙] Cloudflare 写入 TXT 失败 ({resp.status_code}): {blob[:160]}")
+    except Exception as e:
+        print(f"[Team][超速妙] Cloudflare 写入 TXT 异常: {e}")
+    return False
+
+
+# ---- DNS-over-HTTPS verification ----
+
+def _doh_txt_lookup(name: str, proxies: dict) -> list:
+    """Query TXT records for `name` via several DoH providers; return values."""
+    if cffi_requests is None:
+        return []
+    headers = {"Accept": "application/dns-json"}
+    for endpoint in _DOH_ENDPOINTS:
+        try:
+            resp = cffi_requests.get(
+                endpoint, params={"name": name, "type": "TXT"},
+                headers=headers, proxies=proxies, **_REQ_KW)
+            if resp.status_code != 200:
+                continue
+            answers = resp.json().get("Answer", []) or []
+            values = []
+            for ans in answers:
+                if ans.get("type") in (16, "16", "TXT"):
+                    values.append(str(ans.get("data", "")).strip().strip('"'))
+            if values:
+                return values
+        except Exception:
+            continue
+    return []
+
+
+def _wait_txt_propagation(name: str, expected: str, proxies: dict) -> bool:
+    """Poll DoH until the expected TXT content is visible, or timeout."""
+    deadline = time.time() + _DOMAIN_VERIFY_TIMEOUT
+    needle = expected.strip().strip('"')
+    while time.time() < deadline:
+        for val in _doh_txt_lookup(name, proxies):
+            if needle and needle in val:
+                return True
+        time.sleep(_DOMAIN_VERIFY_POLL_INTERVAL)
+    return False
+
+
+# ---- OpenAI Team verified-domains API ----
+
+def _oai_add_domain(headers: dict, account_id: str, domain: str, proxies: dict) -> dict:
+    """Register `domain` on the Team workspace. Returns a dict with the
+    domain_id and the DNS record (name + token) to publish, parsed
+    defensively across the field names seen in the binary string table."""
+    if cffi_requests is None:
+        return {}
+    url = f"{_BACKEND_API}/accounts/{account_id}/domains"
+    for body in ({"domain": domain}, {"domain_name": domain}, {"name": domain}):
+        try:
+            resp = cffi_requests.post(url, json=body, headers=headers,
+                                      proxies=proxies, **_REQ_KW)
+            if resp.status_code in (200, 201):
+                data = resp.json() if resp.text else {}
+                if isinstance(data, dict):
+                    return data
+            elif resp.status_code in (400, 409):
+                # Domain may already be registered — fall through to GET lookup
+                break
+        except Exception:
+            continue
+    # Fallback: list existing domains and find this one
+    try:
+        resp = cffi_requests.get(url, headers=headers, proxies=proxies, **_REQ_KW)
+        if resp.status_code == 200:
+            data = resp.json()
+            items = data.get("items", data) if isinstance(data, dict) else data
+            if isinstance(items, list):
+                for item in items:
+                    dn = str(item.get("domain", item.get("name", ""))).lower()
+                    if dn == domain.lower():
+                        return item
+    except Exception:
+        pass
+    return {}
+
+
+def _extract_domain_fields(info: dict, domain: str) -> tuple:
+    """Pull (domain_id, txt_record_name, txt_token) out of an add-domain
+    response, tolerating the several shapes OpenAI/the binary may use."""
+    domain_id = str(info.get("id", info.get("domain_id", "")))
+    token = (info.get("dns_verification_token")
+             or info.get("verification_token")
+             or info.get("token") or "")
+    record_name = (info.get("dns_record_name")
+                   or info.get("record_name")
+                   or info.get("host") or "")
+    # Some shapes nest the record under a key
+    rec = info.get("dns_record") or info.get("txt_record") or info.get("verification")
+    if isinstance(rec, dict):
+        token = token or rec.get("value") or rec.get("content") or rec.get("token") or ""
+        record_name = record_name or rec.get("name") or rec.get("host") or ""
+    if not record_name:
+        record_name = domain  # default: TXT at the apex
+    return domain_id, record_name, str(token)
+
+
+def _oai_verify_domain(headers: dict, account_id: str, domain_id: str, proxies: dict) -> bool:
+    if cffi_requests is None or not domain_id:
+        return False
+    url = f"{_BACKEND_API}/accounts/{account_id}/domains/{domain_id}/verify"
+    try:
+        resp = cffi_requests.post(url, json={}, headers=headers,
+                                  proxies=proxies, **_REQ_KW)
+        if resp.status_code in (200, 201, 204):
+            return True
+        try:
+            blob = resp.text.lower()
+        except Exception:
+            blob = ""
+        if "verified" in blob:
+            return True
+        print(f"[Team][超速妙] OpenAI 域名验证返回 {resp.status_code}: {blob[:160]}")
+    except Exception as e:
+        print(f"[Team][超速妙] OpenAI 域名验证异常: {e}")
+    return False
+
+
+def _oai_enable_auto_provision(headers: dict, account_id: str, proxies: dict) -> bool:
+    """Enable domain-based auto provisioning so @domain signups auto-join."""
+    if cffi_requests is None:
+        return False
+    url = f"{_BACKEND_API}/accounts/{account_id}/settings/auto_provision"
+    for body in ({"enabled": True}, {"auto_provision": True}, {"value": True}):
+        try:
+            resp = cffi_requests.post(url, json=body, headers=headers,
+                                      proxies=proxies, **_REQ_KW)
+            if resp.status_code in (200, 201, 204):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _sys_team_domain_verify(email, proxies) -> tuple:
+    """v17 「超速妙」: ensure the email's domain is verified + auto-provisioning
+    on a Team workspace, so the account auto-joins on signup (no per-user
+    invite). Returns (is_verified, account_id, domain, domain_id).
     """
-    _warn_team_stub("sys_team_domain_verify")
-    return False, "", "", ""
+    domain = _domain_of(email)
+    if not domain:
+        return False, "", "", ""
+
+    lock = _get_domain_lock(domain)
+    with lock:
+        cached = _verified_domains_cache.get(domain)
+        if cached:
+            return True, cached[0], domain, cached[1]
+
+        try:
+            from utils import db_manager
+            team = db_manager.get_random_team_account()
+        except Exception:
+            team = None
+        if not team:
+            print(f"[Team][超速妙] Team 库为空，无法验证域名 {domain}")
+            return False, "", "", ""
+
+        admin_at = _ensure_team_at_v17(team, proxies)
+        cookies = team.get("cookies", "") or ""
+        if not admin_at and not cookies:
+            print(f"[Team][超速妙] Team 账号缺少有效凭证，无法验证域名 {domain}")
+            return False, "", "", ""
+
+        account_id = team.get("account_id", "") or _get_account_id(admin_at, proxies)
+        if not account_id:
+            print(f"[Team][超速妙] 无法获取 Team account_id")
+            return False, "", "", ""
+
+        headers = _oai_admin_headers(admin_at, account_id, cookies)
+
+        # 1) Register the domain on the Team and read the verification record
+        info = _oai_add_domain(headers, account_id, domain, proxies)
+        if not info:
+            print(f"[Team][超速妙] 在 Team 添加域名 {domain} 失败")
+            return False, "", "", ""
+        domain_id, record_name, token = _extract_domain_fields(info, domain)
+        if not token:
+            print(f"[Team][超速妙] 未取得域名 {domain} 的验证 TXT 值，响应: {json.dumps(info)[:200]}")
+            return False, "", "", ""
+
+        # 2) Publish the TXT record on Cloudflare
+        if not _cf_set_txt(domain, record_name, token, proxies):
+            return False, "", "", ""
+
+        # 3) Wait for DNS propagation
+        print(f"[Team][超速妙] 已写入 TXT，等待 DNS 传播 ({record_name})...")
+        if not _wait_txt_propagation(record_name, token, proxies):
+            print(f"[Team][超速妙] DNS 传播超时，域名 {domain} 验证失败")
+            return False, "", "", ""
+
+        # 4) Ask OpenAI to verify, then enable auto-provisioning
+        if not _oai_verify_domain(headers, account_id, domain_id, proxies):
+            return False, "", "", ""
+        _oai_enable_auto_provision(headers, account_id, proxies)
+
+        _verified_domains_cache[domain] = (account_id, domain_id)
+        print(f"[Team][超速妙] 域名 {domain} 已验证并开启自动加入")
+        return True, account_id, domain, domain_id
 
 
 def _api_clear_all_seats_silent(admin_at: str, account_id: str, proxies: dict) -> int:
