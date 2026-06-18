@@ -141,23 +141,14 @@ def _refresh_with_refresh_token(refresh_token: str, client_id: str,
     """Refresh AT using refresh_token + client_id.
 
     Reference: chatgpt_service.refresh_access_token_with_refresh_token
-    Primary: POST auth.openai.com/oauth/token (JSON)
-    Fallback: POST auth0.openai.com/oauth/token (form-urlencoded)
+    Primary:    POST auth.openai.com/oauth/token  (form-urlencoded, no redirect_uri)
+    Fallback 1: POST auth.openai.com/oauth/token  (JSON, with Sora redirect_uri)
+    Fallback 2: POST auth0.openai.com/oauth/token (form-urlencoded, legacy)
     """
     if cffi_requests is None or not refresh_token or not client_id:
         return {}
-    try:
-        # Primary: JSON to auth.openai.com
-        url = "https://auth.openai.com/oauth/token"
-        payload = {
-            "client_id": client_id,
-            "grant_type": "refresh_token",
-            "redirect_uri": "com.openai.sora://auth.openai.com/android/com.openai.sora/callback",
-            "refresh_token": refresh_token,
-        }
-        headers = {"Content-Type": "application/json"}
-        resp = cffi_requests.post(url, json=payload, headers=headers,
-                                   proxies=proxies, **_REQ_KW)
+
+    def _parse_tokens(resp) -> dict:
         if 200 <= resp.status_code < 300:
             data = resp.json()
             return {
@@ -165,29 +156,58 @@ def _refresh_with_refresh_token(refresh_token: str, client_id: str,
                 "id_token": data.get("id_token", ""),
                 "refresh_token": data.get("refresh_token", ""),
             }
-
-        # Fallback: form-urlencoded to auth0.openai.com
-        url2 = "https://auth0.openai.com/oauth/token"
-        form_data = {
-            "grant_type": "refresh_token",
-            "client_id": client_id,
-            "refresh_token": refresh_token,
-            "scope": "openid profile email offline_access",
-        }
-        headers2 = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "application/json",
-        }
-        resp2 = cffi_requests.post(url2, data=form_data, headers=headers2,
-                                    proxies=proxies, **_REQ_KW)
-        if 200 <= resp2.status_code < 300:
-            data = resp2.json()
-            return {
-                "access_token": data.get("access_token", ""),
-                "id_token": data.get("id_token", ""),
-                "refresh_token": data.get("refresh_token", ""),
-            }
         return {}
+
+    try:
+        # Primary (reference: codex_invitation_helper.refresh_access_token in the
+        # bugteam reference repo): form-urlencoded POST to auth.openai.com/oauth/token
+        # — proven working with the Codex Desktop client_id (app_EMoamEEZ73f0CkXaXp7hrann).
+        resp = cffi_requests.post(
+            "https://auth.openai.com/oauth/token",
+            data={
+                "grant_type": "refresh_token",
+                "client_id": client_id,
+                "refresh_token": refresh_token,
+            },
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+            },
+            proxies=proxies, **_REQ_KW)
+        parsed = _parse_tokens(resp)
+        if parsed:
+            return parsed
+
+        # Fallback 1: JSON body to auth.openai.com (some clients require redirect_uri)
+        resp = cffi_requests.post(
+            "https://auth.openai.com/oauth/token",
+            json={
+                "client_id": client_id,
+                "grant_type": "refresh_token",
+                "redirect_uri": "com.openai.sora://auth.openai.com/android/com.openai.sora/callback",
+                "refresh_token": refresh_token,
+            },
+            headers={"Content-Type": "application/json"},
+            proxies=proxies, **_REQ_KW)
+        parsed = _parse_tokens(resp)
+        if parsed:
+            return parsed
+
+        # Fallback 2: legacy auth0.openai.com endpoint
+        resp2 = cffi_requests.post(
+            "https://auth0.openai.com/oauth/token",
+            data={
+                "grant_type": "refresh_token",
+                "client_id": client_id,
+                "refresh_token": refresh_token,
+                "scope": "openid profile email offline_access",
+            },
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded",
+                "Accept": "application/json",
+            },
+            proxies=proxies, **_REQ_KW)
+        return _parse_tokens(resp2)
     except Exception:
         return {}
 
