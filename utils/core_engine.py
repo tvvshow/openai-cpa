@@ -657,10 +657,12 @@ def handle_registration_result(result: Any, cpa_upload: bool = False, run_ctx: d
     domain_failure_reason = str(run_ctx.get('mail_domain_failure_reason', '') or '').strip().lower() if run_ctx else ''
     domain_failure_event = mail_service.pop_last_domain_failure_event()
 
-    if not token_json_str or token_json_str == "retry_403":
-        if token_json_str == "retry_403":
+    if not token_json_str or token_json_str in ("retry_403", "retry_429"):
+        if token_json_str in ("retry_403", "retry_429"):
             with _stats_lock: run_stats["retries"] += 1
-            print(f"[{ts()}] [WARNING] 检测到 403 频率限制，挂起重试...")
+            print(f"[{ts()}] [WARNING] 检测到 {token_json_str} 频率限制，挂起重试...")
+            # 429(IP 限流)与 403 走同一套冷却重试：不计为失败、交回引擎 sleep 后重试，
+            # 避免立即换号重发加重 OpenAI 限流。
             ret_status = "retry_403"
         else:
             with _stats_lock: run_stats["failed"] += 1

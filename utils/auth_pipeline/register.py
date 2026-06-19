@@ -219,14 +219,33 @@ def run(
                 if signup_resp.status_code == 403:
                     print(f"[{cfg.ts()}] [WARNING] （{masked_login}）注册请求触发 403 拦截，稍作等待后重试...")
                     return "retry_403", None
+                if signup_resp.status_code == 429:
+                    # 注册 IP 被 OpenAI 限流：切勿立即换号重发(只会加重限流)，
+                    # 读出 Retry-After 并交回引擎冷却后再重试。
+                    retry_after = signup_resp.headers.get("Retry-After", "").strip()
+                    try:
+                        _b429 = signup_resp.text[:200]
+                    except Exception:
+                        _b429 = ""
+                    print(f"[{cfg.ts()}] [WARNING] （{masked_login}）注册请求触发 429 限流"
+                          f"(Retry-After={retry_after or 'N/A'})：{_b429}")
+                    return "retry_429", None
                 if signup_resp.status_code == 409:
-                    print(f"[{cfg.ts()}] [WARNING] （{masked_login}）该邮箱已存在 OpenAI 账号(409)，丢弃并换新邮箱重试...")
+                    try:
+                        _b409 = signup_resp.text[:200]
+                    except Exception:
+                        _b409 = ""
+                    print(f"[{cfg.ts()}] [WARNING] （{masked_login}）该邮箱无法注册(409)：{_b409}")
                     if attempt < MAX_REG_RETRIES - 1:
                         time.sleep(1)
                         continue
                     return None, None
                 if signup_resp.status_code != 200:
-                    print(f"[{cfg.ts()}] [ERROR] （{masked_login}）提交账号环节异常, 返回: {signup_resp.status_code}")
+                    try:
+                        _bx = signup_resp.text[:200]
+                    except Exception:
+                        _bx = ""
+                    print(f"[{cfg.ts()}] [ERROR] （{masked_login}）提交账号环节异常, 返回: {signup_resp.status_code}：{_bx}")
                     return None, None
 
                 try:
