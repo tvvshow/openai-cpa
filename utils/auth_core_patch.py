@@ -697,7 +697,28 @@ _domain_locks: dict = {}
 
 
 def _domain_of(email: str) -> str:
-    return email.rsplit("@", 1)[-1].strip().lower() if "@" in (email or "") else ""
+    """Return the configured ROOT mail domain the email belongs to.
+
+    超速妙应验证「根域」一次并缓存，使该根域下任意随机子域邮箱自动加入 Team。
+    原实现返回完整子域(每封随机邮箱都唯一)→缓存永不命中→每封邮箱都把唯一子域
+    当新域名加到 Team 并跑全套验证(5+ 次 OpenAI 请求)→猛撞域名 API 触发 429，
+    且 Team 域名列表爆炸、子域被注册成管理域后该邮箱注册被判冲突 409。
+    """
+    host = email.rsplit("@", 1)[-1].strip().lower() if "@" in (email or "") else ""
+    if not host:
+        return ""
+    try:
+        from utils import config as cfg
+        raw = str(getattr(cfg, "MAIL_DOMAINS", "") or "")
+        roots = [d.strip().lower().lstrip("*.") for d in raw.split(",") if d.strip()]
+    except Exception:
+        roots = []
+    # longest-match first：a.b.9999.xx.kg 应匹配 9999.xx.kg，而非某个短后缀
+    for root in sorted(set(roots), key=len, reverse=True):
+        if host == root or host.endswith("." + root):
+            return root
+    # 未匹配到配置根域(生成的邮箱不应出现)：退化为完整 host，避免猜错 eTLD+1
+    return host
 
 
 def _get_domain_lock(domain: str) -> threading.Lock:
