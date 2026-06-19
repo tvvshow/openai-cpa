@@ -40,6 +40,10 @@ def run(
     sys_handle_b = ""
     sys_handle_c = ""
     try:
+        if getattr(cfg, 'TEAM_MODE_OVERSPEED', False):
+            if not getattr(cfg, 'CF_API_EMAIL', ""):
+                print(f"[{cfg.ts()}] [ERROR] 请确认填写好CF邮箱和KEY在启动")
+                return None, None
         s_reg = requests.Session(proxies=proxies, impersonate="chrome")
         s_reg.headers.update({"Connection": "close"})
         s_reg.timeout = 30
