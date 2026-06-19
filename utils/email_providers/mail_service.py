@@ -1446,6 +1446,16 @@ def get_email_and_token(
                     print(f"[{cfg.ts()}] [WARNING] cloudflare_temp_email邮箱容量疑似超限 (尝试 {attempt + 1}/5): {res.text}")
                     time.sleep(1)
                     continue
+                if status_code >= 400:
+                    # 后端(cloudflare_temp_email)拒绝创建，把真实原因打出来便于定位，
+                    # 不要再笼统当成“网络异常”。常见：
+                    #   'Invalid domain'           -> 域名不在后端 DOMAINS 白名单(注意后端可能用 *.domain 通配符格式)
+                    #   'Failed to create address' -> 后端 D1 写入失败(库满/未跑迁移/绑定异常等，需后端侧排查)
+                    terminal_failure_reason = "cloudflare_temp_email_network"
+                    print(f"[{cfg.ts()}] [ERROR] cloudflare_temp_email邮箱申请被后端拒绝 "
+                          f"(HTTP {status_code}, 尝试 {attempt + 1}/5) domain={selected_domain}: {text[:200]}")
+                    time.sleep(1)
+                    continue
                 res.raise_for_status()
                 data = res.json()
                 if data and data.get("address"):
