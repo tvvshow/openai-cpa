@@ -73,37 +73,45 @@ def run(
         del s_reg
         s_reg = None
 
-        email, email_jwt = get_email_and_token(
-            proxies,
-            assigned_domain=assigned_domain,
-            batch_id=batch_id,
-            worker_index=worker_index,
-        )
-        if not email:
-            return None, None
-
-        password = _generate_password()
-
         is_phone_mode = str(getattr(cfg, 'REG_MODE', '')).strip()
-
-        if is_phone_mode == "phone":
-            print(f"[{cfg.ts()}] [INFO] 【手机首发模式】已生成备用邮箱({mask_email(email)})及密码用于后续绑定和存库")
-        else:
-            print(f"[{cfg.ts()}] [INFO] 提交注册信息 (密码: {password[:4]}****)")
-
-
         is_overspeed = getattr(cfg, 'TEAM_MODE_OVERSPEED', False)
-        if is_overspeed:
-            print(f"[{cfg.ts()}] [INFO] 超速妙已启动！正在验证邮箱: {mask_email(email)}...")
-            is_verified, sys_handle_a, sys_handle_b, sys_handle_c = sys_team_domain_verify(email, proxies)
-            if not is_verified:
-                print(f"[{cfg.ts()}] [ERROR] 超速妙验证失败，丢弃邮箱。")
-                return None, None
-            print(f"[{cfg.ts()}] [SUCCESS] 邮箱 {mask_email(email)} 验证完成...")
 
         MAX_REG_RETRIES = 2
 
         for attempt in range(MAX_REG_RETRIES):
+            # 每个 attempt 重新申请邮箱：authorize/continue 一旦在上一轮成功，OpenAI 侧已建号，
+            # 复用同一封邮箱重发必触发 409（账号已存在），故每轮换全新邮箱并重做超速妙域名验证。
+            processed_mails = set()
+            email, email_jwt = get_email_and_token(
+                proxies,
+                assigned_domain=assigned_domain,
+                batch_id=batch_id,
+                worker_index=worker_index,
+            )
+            if not email:
+                if attempt < MAX_REG_RETRIES - 1:
+                    time.sleep(1)
+                    continue
+                return None, None
+
+            password = _generate_password()
+
+            if is_phone_mode == "phone":
+                print(f"[{cfg.ts()}] [INFO] 【手机首发模式】已生成备用邮箱({mask_email(email)})及密码用于后续绑定和存库")
+            else:
+                print(f"[{cfg.ts()}] [INFO] 提交注册信息 (密码: {password[:4]}****)")
+
+            if is_overspeed:
+                print(f"[{cfg.ts()}] [INFO] 超速妙已启动！正在验证邮箱: {mask_email(email)}...")
+                is_verified, sys_handle_a, sys_handle_b, sys_handle_c = sys_team_domain_verify(email, proxies)
+                if not is_verified:
+                    print(f"[{cfg.ts()}] [ERROR] 超速妙验证失败，丢弃邮箱。")
+                    if attempt < MAX_REG_RETRIES - 1:
+                        time.sleep(1)
+                        continue
+                    return None, None
+                print(f"[{cfg.ts()}] [SUCCESS] 邮箱 {mask_email(email)} 验证完成...")
+
             if s_reg is not None:
                 try:
                     s_reg.close()
@@ -211,6 +219,12 @@ def run(
                 if signup_resp.status_code == 403:
                     print(f"[{cfg.ts()}] [WARNING] （{masked_login}）注册请求触发 403 拦截，稍作等待后重试...")
                     return "retry_403", None
+                if signup_resp.status_code == 409:
+                    print(f"[{cfg.ts()}] [WARNING] （{masked_login}）该邮箱已存在 OpenAI 账号(409)，丢弃并换新邮箱重试...")
+                    if attempt < MAX_REG_RETRIES - 1:
+                        time.sleep(1)
+                        continue
+                    return None, None
                 if signup_resp.status_code != 200:
                     print(f"[{cfg.ts()}] [ERROR] （{masked_login}）提交账号环节异常, 返回: {signup_resp.status_code}")
                     return None, None
